@@ -20,6 +20,9 @@ pub enum Event {
     /// owns the timer; the engine only ever sees the decision point.)
     Promoted(WinId),
     Closed(WinId),
+    /// The user asked for an empty stage (hotkey, or the desktop itself
+    /// became foreground): send the focused window home, focus nothing.
+    ClearStage,
     /// Desk mode toggled: eGPU / 65" panel attached or removed.
     DeskMode(bool),
 }
@@ -60,6 +63,7 @@ impl Engine {
             Event::Opened(id, meta) => self.on_opened(id, meta),
             Event::Promoted(id) => self.on_promoted(id),
             Event::Closed(id) => self.on_closed(id),
+            Event::ClearStage => self.on_clear_stage(),
         }
     }
 
@@ -153,6 +157,20 @@ impl Engine {
         cmds
     }
 
+    fn on_clear_stage(&mut self) -> Vec<Command> {
+        let Some(id) = self.focused.take() else {
+            return Vec::new();
+        };
+        match self.homes.get(&id) {
+            Some(&slot) => vec![Command::Place {
+                win: id,
+                to: layout::window_rect(&self.cfg, slot),
+                animate: true,
+            }],
+            None => Vec::new(),
+        }
+    }
+
     fn on_closed(&mut self, id: WinId) -> Vec<Command> {
         if let Some(slot) = self.homes.remove(&id) {
             self.occupants.remove(&slot);
@@ -211,6 +229,39 @@ mod tests {
         ));
         assert_eq!(e.home_of(2), Some(term_home));
         assert_eq!(e.focused(), Some(1));
+    }
+
+    #[test]
+    fn refocusing_the_focused_window_is_a_noop() {
+        let (mut e, _) = engine_with_terminal_rule();
+        e.handle(Event::DeskMode(true));
+        e.handle(Event::Opened(1, meta("a.exe")));
+        e.handle(Event::Promoted(1));
+        // Clicking inside the focused window re-reports it as
+        // foreground; nothing may move.
+        assert!(e.handle(Event::Promoted(1)).is_empty());
+        assert_eq!(e.focused(), Some(1));
+    }
+
+    #[test]
+    fn clear_stage_sends_focused_home() {
+        let (mut e, cfg) = engine_with_terminal_rule();
+        e.handle(Event::DeskMode(true));
+        e.handle(Event::Opened(1, meta("a.exe")));
+        let home = e.home_of(1).unwrap();
+        e.handle(Event::Promoted(1));
+        let cmds = e.handle(Event::ClearStage);
+        assert_eq!(
+            cmds,
+            vec![Command::Place {
+                win: 1,
+                to: layout::window_rect(&cfg, home),
+                animate: true
+            }]
+        );
+        assert_eq!(e.focused(), None);
+        // Second clear is a no-op.
+        assert!(e.handle(Event::ClearStage).is_empty());
     }
 
     #[test]
