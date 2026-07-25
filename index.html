@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Focal Desk — 65″ layout mock</title>
+<style>
+:root{
+  --desk:#17181b; --win:#232529; --win-light:#f2efe8; --edge:#3a3d44;
+  --text:#e8e6df; --text-dim:#9a978f; --ink:#2c2b27; --ink-dim:#6f6d66;
+  --amber:#E6A23C; --graphite:#23221E; --bone:#F4F0E7;
+}
+*{margin:0;padding:0;box-sizing:border-box;user-select:none}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--desk);
+  font-family:"Segoe UI",system-ui,sans-serif;color:var(--text)}
+#fx{position:fixed;inset:0;z-index:1}
+.win{position:absolute;background:var(--win);border:1px solid var(--edge);border-radius:8px;
+  overflow:hidden;cursor:pointer;z-index:10;display:flex;flex-direction:column;
+  transition:left .5s cubic-bezier(.22,1,.36,1),top .5s cubic-bezier(.22,1,.36,1),
+  width .5s cubic-bezier(.22,1,.36,1),height .5s cubic-bezier(.22,1,.36,1);
+  box-shadow:0 6px 24px rgba(0,0,0,.45)}
+.win.lit{background:var(--win-light);color:var(--ink)}
+.win.focused{border-color:#565b66}
+.tbar{display:flex;align-items:center;gap:8px;padding:0 10px;height:28px;flex:none;
+  background:rgba(0,0,0,.18);font-size:12px;font-weight:600}
+.lit .tbar{background:rgba(0,0,0,.05)}
+.tbar .dot{width:9px;height:9px;border-radius:50%;flex:none}
+.tbar .ttl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tbar .sz{margin-left:auto;font-weight:400;font-size:11px;opacity:.55}
+.tbar .btns{display:flex;gap:6px;margin-left:10px;opacity:.5;font-size:11px;letter-spacing:2px}
+.bd{flex:1;overflow:hidden;position:relative;pointer-events:none}
+#ghost{position:fixed;display:none;border:1.5px dashed #4a4e57;border-radius:8px;z-index:26;
+  align-items:center;justify-content:center;font-size:12px;color:#7d818b;pointer-events:none}
+#ctrl{position:fixed;top:14px;right:14px;z-index:100;background:rgba(28,30,34,.92);
+  border:1px solid var(--edge);border-radius:10px;padding:12px 14px;width:250px;font-size:12px;
+  backdrop-filter:blur(6px)}
+#ctrl h1{font-size:13px;font-weight:600;margin-bottom:2px;color:var(--bone)}
+#ctrl .sub{color:var(--text-dim);font-size:11px;margin-bottom:10px}
+#ctrl .row{display:flex;align-items:center;gap:8px;margin:7px 0}
+#ctrl label{width:52px;color:var(--text-dim);flex:none}
+#ctrl input[type=range]{flex:1;accent-color:var(--amber)}
+#ctrl .val{width:44px;text-align:right;color:var(--text)}
+#ctrl .btns2{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+#ctrl button{background:none;border:1px solid #464a52;border-radius:6px;color:var(--text);
+  font-size:11px;padding:4px 9px;cursor:pointer}
+#ctrl button:hover{border-color:#6a6f79}
+#ctrl button.on{background:var(--amber);border-color:var(--amber);color:#1c1408;font-weight:600}
+#ctrl .chk{display:flex;gap:14px;margin-top:9px;color:var(--text-dim)}
+#ctrl .chk label{width:auto;display:flex;align-items:center;gap:5px;cursor:pointer}
+#collapse{position:absolute;top:8px;right:10px;background:none;border:none;color:var(--text-dim);
+  cursor:pointer;font-size:13px}
+#status{position:fixed;left:16px;bottom:12px;z-index:100;font-size:11.5px;color:#6d7078;
+  background:rgba(23,24,27,.7);padding:4px 10px;border-radius:6px}
+#help{position:fixed;inset:0;z-index:200;display:none;align-items:center;justify-content:center;
+  background:rgba(10,10,12,.72)}
+#help .card{background:#212327;border:1px solid var(--edge);border-radius:12px;padding:26px 30px;
+  width:400px;font-size:13px;line-height:2}
+#help h2{font-size:15px;margin-bottom:8px;color:var(--bone)}
+#help kbd{background:#33363c;border-radius:4px;padding:1px 7px;font-family:Consolas,monospace;
+  font-size:12px;margin-right:8px}
+.mono{font-family:Consolas,"Cascadia Code",monospace}
+.codeln{font-size:12px;line-height:1.65;white-space:pre;padding:0 0 0 8px}
+.ln{display:inline-block;width:26px;color:#5b606b;text-align:right;margin-right:12px}
+.k{color:#c586c0}.f{color:#dcdcaa}.s{color:#ce9178}.c{color:#6a9955}.t{color:#4ec9b0}.v{color:#9cdcfe}
+.trm{font-size:12px;line-height:1.7;padding:8px 12px;color:#c8ccc9}
+.trm .p{color:#7ee081}.trm .d{color:#8a8f98}
+.cur{display:inline-block;width:7px;height:13px;background:#7ee081;vertical-align:-2px;
+  animation:blink 1.1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.bub{max-width:78%;border-radius:10px;padding:7px 11px;font-size:12.5px;line-height:1.5;margin:8px 12px}
+.bub.u{background:#3a3f47;margin-left:auto}
+.bub.a{background:#2d3d3a;border-left:3px solid #d97757}
+.lit .bub.u{background:#e3ded2}
+.lit .bub.a{background:#efe6dc;border-left:3px solid #d97757}
+.chrome{display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.06);padding:5px 10px;font-size:11px}
+.chrome .tab{background:rgba(0,0,0,.08);border-radius:6px 6px 0 0;padding:3px 12px}
+.chrome .url{flex:1;background:rgba(255,255,255,.55);border-radius:12px;padding:3px 12px;color:#555}
+.frow{display:flex;align-items:center;gap:10px;padding:6px 14px;font-size:12.5px;border-bottom:1px solid rgba(0,0,0,.05)}
+.frow .fi{width:16px;text-align:center;color:#b98b4e}
+.frow .fm{margin-left:auto;color:#999;font-size:11px}
+.mrow{padding:7px 14px;border-bottom:1px solid rgba(0,0,0,.06);font-size:12px}
+.mrow b{display:block;font-size:12.5px}
+.mrow .mt{float:right;color:#999;font-size:11px}
+.mrow .ms{color:#777;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.qrow{padding:8px 14px;font-size:12px}
+.qbar{height:5px;border-radius:3px;background:rgba(255,255,255,.12);margin-top:5px;overflow:hidden}
+.qbar i{display:block;height:100%;background:var(--amber);border-radius:3px}
+.note{padding:10px 16px;font-size:13px;line-height:1.9;color:#4a4436;
+  background:repeating-linear-gradient(transparent,transparent 24px,rgba(0,0,0,.06) 25px)}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;padding:8px 12px;font-size:11px;text-align:center}
+.cal .h{color:#999;font-weight:600}
+.cal .d{padding:4px 0;border-radius:5px}
+.cal .today{background:var(--amber);color:#1c1408;font-weight:700}
+.mus{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:8px}
+.art{width:38%;aspect-ratio:1;border-radius:10px;background:var(--graphite);display:flex;
+  align-items:center;justify-content:center;color:var(--amber);font-size:26px}
+.mbar{width:70%;height:4px;border-radius:2px;background:rgba(255,255,255,.15);overflow:hidden}
+.mbar i{display:block;height:100%;width:35%;background:var(--amber)}
+.mtx{font-size:12px;color:var(--text-dim)}
+.studio{display:flex;height:100%}
+.studio .tools{width:34px;background:rgba(0,0,0,.25);display:flex;flex-direction:column;
+  align-items:center;gap:10px;padding-top:10px}
+.studio .tools i{width:16px;height:16px;border-radius:4px;background:#3d414a}
+.studio .vp{flex:1;position:relative}
+.avr{width:26px;height:26px;border-radius:50%;flex:none;display:flex;align-items:center;
+  justify-content:center;font-size:11px;font-weight:700;color:#fff}
+.crow{display:flex;gap:9px;padding:7px 13px;font-size:12.5px;line-height:1.45;align-items:flex-start}
+.crow .cb{color:#3a3a35}
+.crow .cn{font-weight:600;font-size:11px;color:#8a8578}
+</style>
+</head>
+<body>
+<canvas id="fx"></canvas>
+<div id="ghost"></div>
+
+<div id="ctrl">
+  <button id="collapse" title="collapse">–</button>
+  <h1>Focal desk</h1>
+  <div class="sub">65″ 8K layout simulator</div>
+  <div id="ctrlbody">
+    <div class="row"><label>Focal</label><input type="range" id="sF" min="48" max="64" value="56"><span class="val" id="oF">56%</span></div>
+    <div class="row"><label>Bands</label><input type="range" id="sB" min="16" max="26" value="22"><span class="val" id="oB">22%</span></div>
+    <div class="row"><label>Gutter</label><input type="range" id="sG" min="100" max="250" step="25" value="150"><span class="val" id="oG">1.50″</span></div>
+    <div class="chk">
+      <label><input type="checkbox" id="cFlow" checked> flow</label>
+      <label><input type="checkbox" id="cWires" checked> wires</label>
+    </div>
+    <div class="btns2">
+      <button id="bTab">alt-tab (Tab)</button>
+      <button id="bConn">connect (C)</button>
+      <button id="bFull">fullscreen (F)</button>
+      <button id="bHelp">keys (?)</button>
+    </div>
+  </div>
+</div>
+
+<div id="status"></div>
+
+<div id="help"><div class="card">
+  <h2>Keys</h2>
+  <div><kbd>Tab</kbd> cycle focus (alt-tab)</div>
+  <div><kbd>1–9 0 - =</kbd> focus app directly</div>
+  <div><kbd>Esc</kbd> clear focus / exit connect mode</div>
+  <div><kbd>C</kbd> connect mode — click two windows to link/unlink</div>
+  <div><kbd>F</kbd> browser fullscreen &nbsp;·&nbsp; <kbd>?</kbd> this help</div>
+  <div style="margin-top:10px;color:#8a8f98;font-size:12px;line-height:1.6">
+    Click any window to pull it to the focal slot; its home stays as a dashed ghost.
+    Solid-dash wires are hard (auto-detected) links, fine-dot wires are soft (hand-made) links.
+    The gutter belongs to the wires — windows resize to honor it.</div>
+</div></div>
+
+<script>
+"use strict";
+const SCREEN_W_IN=56.65, PX8K=7680;
+const APPS=[
+ {n:"Claude",c:"#D97757",k:"claude"},
+ {n:"Claude — browser",c:"#378ADD",k:"ctab"},
+ {n:"gadz-core",c:"#8a8f98",k:"folder"},
+ {n:"Reflector Studio",c:"#7F77DD",k:"studio"},
+ {n:"Print dispatch",c:"#E6A23C",k:"queue"},
+ {n:"Editor",c:"#639922",k:"editor"},
+ {n:"Terminal",c:"#5F5E5A",k:"term",ff:.55},
+ {n:"Chat",c:"#D4537E",k:"chat",ff:.62},
+ {n:"Mail",c:"#1D9E75",k:"mail"},
+ {n:"Notes",c:"#EFB93F",k:"notes"},
+ {n:"Music",c:"#AFA9EC",k:"music",ff:.5,fh:.8},
+ {n:"Calendar",c:"#5DCAA5",k:"cal"}
+];
+const HOMEOF=[1,6,11,2,8,3,12,4,5,7,9,10];
+const HARD=[[0,1],[0,2],[1,2],[3,4]];
+let soft=[[5,6]];
+let focused=0, connectMode=false, selA=-1;
+const cfg={F:.56,B:.22,gutterIn:1.5};
+let flowOn=true, wiresOn=true;
+
+function regions(){
+  const fc=cfg.F, sc=(1-fc)/2, tb=cfg.B, mid=1-2*tb;
+  return[
+    {x:sc,y:tb,w:fc,h:mid,t:0},
+    {x:0,y:tb,w:sc,h:mid/2,t:1},{x:0,y:tb+mid/2,w:sc,h:mid/2,t:1},
+    {x:sc+fc,y:tb,w:sc,h:mid/2,t:1},{x:sc+fc,y:tb+mid/2,w:sc,h:mid/2,t:1},
+    {x:sc,y:0,w:fc/2,h:tb,t:2},{x:sc+fc/2,y:0,w:fc/2,h:tb,t:2},
+    {x:sc,y:tb+mid,w:fc/2,h:tb,t:2},{x:sc+fc/2,y:tb+mid,w:fc/2,h:tb,t:2},
+    {x:0,y:0,w:sc,h:tb,t:2},{x:sc+fc,y:0,w:sc,h:tb,t:2},
+    {x:0,y:tb+mid,w:sc,h:tb,t:2},{x:sc+fc,y:tb+mid,w:sc,h:tb,t:2}
+  ];
+}
+function gpxHalf(){return cfg.gutterIn/SCREEN_W_IN*innerWidth/2;}
+function rectFor(reg){
+  const g=gpxHalf(), W=innerWidth, H=innerHeight;
+  return{l:reg.x*W+g, t:reg.y*H+g, w:reg.w*W-2*g, h:reg.h*H-2*g};
+}
+
+function content(k){
+ switch(k){
+  case"editor":{
+   const L=[
+    ['<span class="k">use</span> <span class="t">windows</span>::Win32::UI::WindowsAndMessaging::*;'],
+    ['<span class="k">use</span> <span class="t">crate</span>::{layout, wires, anim};'],
+    [''],
+    ['<span class="c">// promote whatever the user activates</span>'],
+    ['<span class="k">fn</span> <span class="f">on_foreground</span>(<span class="v">hwnd</span>: HWND) {'],
+    ['    <span class="k">let</span> <span class="v">slot</span> = layout::focal();'],
+    ['    <span class="k">let</span> <span class="v">prev</span> = layout::occupant(slot);'],
+    ['    <span class="k">if let</span> <span class="t">Some</span>(p) = prev {'],
+    ['        anim::fly(p, layout::home_of(p), <span class="v">EASE_OUT</span>);'],
+    ['    }'],
+    ['    anim::fly(hwnd, slot.rect(), <span class="v">EASE_OUT</span>);'],
+    ['    wires::reroute();  <span class="c">// gutters only</span>'],
+    ['}'],
+    [''],
+    ['<span class="c">// gutter is structural: windows shrink, wires win</span>'],
+    ['<span class="k">const</span> <span class="v">GUTTER_IN</span>: f32 = <span class="s">1.5</span>;']
+   ];
+   return '<div class="mono" style="padding:8px 0;background:#1e2126;height:100%">'+
+     L.map((l,i)=>'<div class="codeln"><span class="ln">'+(i+1)+'</span>'+l[0]+'</div>').join('')+'</div>';
+  }
+  case"term":return '<div class="mono trm" style="background:#161a17;height:100%">'+
+   '<div><span class="p">ryan@sea</span><span class="d">:~/dev/focal-desk$</span> cargo run --release</div>'+
+   '<div class="d">   Compiling focal-desk v0.1.0</div>'+
+   '<div class="d">    Finished release [optimized] in 4.2s</div>'+
+   '<div>listening: EVENT_SYSTEM_FOREGROUND</div>'+
+   '<div><span class="d">[14:02:11]</span> promote Terminal → focal <span class="d">(238ms)</span></div>'+
+   '<div><span class="d">[14:02:11]</span> return Editor → home R1</div>'+
+   '<div><span class="d">[14:02:11]</span> wires: 5 routed, 0 stubbed</div>'+
+   '<div><span class="p">ryan@sea</span><span class="d">:~/dev/focal-desk$</span> <span class="cur"></span></div></div>';
+  case"claude":return '<div style="height:100%;display:flex;flex-direction:column;justify-content:flex-end;padding-bottom:10px">'+
+   '<div class="bub u">make the gutter structural — it should resize the windows</div>'+
+   '<div class="bub a">Done. Regions tile the screen and every window insets by half a gutter — the gutter now belongs to the wires alone.</div>'+
+   '<div class="bub u">now build me a full screen mock i can play with</div>'+
+   '<div class="bub a">You’re looking at it.</div></div>';
+  case"ctab":return '<div style="height:100%;display:flex;flex-direction:column;background:#efeadf;color:#2c2b27">'+
+   '<div class="chrome"><span class="tab">Claude</span><span class="url">claude.ai/chat/focal-desk</span></div>'+
+   '<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;padding-bottom:8px">'+
+   '<div class="bub u">same session, different window</div>'+
+   '<div class="bub a">Hard-linked to the desktop app — follow the wire.</div></div></div>';
+  case"folder":return '<div style="background:var(--win-light);color:var(--ink);height:100%">'+
+   [['▸','products/','—'],['▸','brand/','—'],['▸','plan/','—'],['▤','README.md','142 KB'],
+    ['▤','INDEX.md','9 KB'],['▤','CLAUDE.md','6 KB']].map(f=>
+    '<div class="frow"><span class="fi">'+f[0]+'</span>'+f[1]+'<span class="fm">'+f[2]+'</span></div>').join('')+'</div>';
+  case"studio":return '<div class="studio"><div class="tools"><i></i><i></i><i></i><i></i></div>'+
+   '<div class="vp"><svg viewBox="0 0 200 140" style="position:absolute;inset:0;width:100%;height:100%">'+
+   '<ellipse cx="100" cy="46" rx="44" ry="16" fill="none" stroke="#7F77DD" stroke-width="1.2" opacity=".9"/>'+
+   '<ellipse cx="100" cy="46" rx="30" ry="10" fill="none" stroke="#7F77DD" stroke-width=".8" opacity=".5"/>'+
+   '<path d="M100 62 L100 108" stroke="#a7a2e8" stroke-width="1.2"/>'+
+   '<ellipse cx="100" cy="112" rx="26" ry="7" fill="none" stroke="#7F77DD" stroke-width="1.2" opacity=".9"/>'+
+   '<g stroke="#4a4460" stroke-width=".5" opacity=".6"><path d="M20 125 L180 125"/><path d="M30 132 L170 132"/></g>'+
+   '<text x="12" y="18" fill="#8b86c9" font-size="8" font-family="Consolas">diffuser_rev5.step — 214k tris</text></svg></div></div>';
+  case"queue":return '<div style="padding-top:4px">'+
+   [['diffuser_rev5_bone.gcode',62],['ring_clip_x8.gcode',100],['shade_test_wall2.gcode',14]].map(q=>
+   '<div class="qrow">'+q[0]+'<span style="float:right;color:#8a8f98">'+(q[1]===100?'done':q[1]+'%')+'</span>'+
+   '<div class="qbar"><i style="width:'+q[1]+'%"></i></div></div>').join('')+'</div>';
+  case"chat":return '<div style="background:var(--win-light);color:var(--ink);height:100%;padding-top:4px">'+
+   [['K','#7F77DD','wall panels came out clean, zero warp'],
+    ['R','#D85A30','send one to the studio, I want it under the ring light'],
+    ['K','#7F77DD','already on your bench'],
+    ['R','#D85A30','legend']].map(m=>
+   '<div class="crow"><span class="avr" style="background:'+m[1]+'">'+m[0]+'</span>'+
+   '<span><span class="cn">'+(m[0]==='R'?'ryan':'kelsey')+'</span><br><span class="cb">'+m[2]+'</span></span></div>').join('')+'</div>';
+  case"mail":return '<div style="background:var(--win-light);color:var(--ink);height:100%">'+
+   [['Anodize Northwest','Quote: 40× ring housings','9:14'],
+    ['Stripe','Payout on the way','8:02'],
+    ['Ceramics supplier','Bone white pigment — restock','7:48'],
+    ['GitHub','[gadz-tech/BusinessPlan] merged','6:21']].map(m=>
+   '<div class="mrow"><span class="mt">'+m[2]+'</span><b>'+m[0]+'</b><span class="ms">'+m[1]+'</span></div>').join('')+'</div>';
+  case"notes":return '<div class="note" style="background:#f6f1df;height:100%">'+
+   'focal desk — ship list<br>· dwell promote: 1.2s?<br>· 9th window policy<br>· wire pulse = notification<br>· flow shader on wallpaper layer</div>';
+  case"music":return '<div class="mus"><div class="art">♪</div>'+
+   '<div class="mtx"><b style="color:var(--text)">Low Light</b> — Studio Ambient</div>'+
+   '<div class="mbar"><i id="mprog"></i></div><div class="mtx">⏮ &nbsp; ⏸ &nbsp; ⏭</div></div>';
+  case"cal":{
+   const days=['M','T','W','T','F','S','S'];let h=days.map(d=>'<span class="h">'+d+'</span>').join('');
+   h+='<span></span><span></span>';
+   for(let d=1;d<=31;d++)h+='<span class="d'+(d===24?' today':'')+'">'+d+'</span>';
+   return '<div style="background:var(--win-light);color:var(--ink);height:100%">'+
+    '<div style="padding:8px 14px 0;font-size:12px;font-weight:600">July 2026</div><div class="cal">'+h+'</div></div>';
+  }
+ }
+ return '';
+}
+
+const LIGHT=new Set(["folder","chat","mail","notes","cal","ctab"]);
+const wins=APPS.map((a,i)=>{
+  const w=document.createElement('div');
+  w.className='win'+(LIGHT.has(a.k)?' lit':'');
+  w.innerHTML='<div class="tbar"><span class="dot" style="background:'+a.c+'"></span>'+
+   '<span class="ttl">'+a.n+'</span><span class="sz"></span><span class="btns">— ▢ ✕</span></div>'+
+   '<div class="bd">'+content(a.k)+'</div>';
+  w.onclick=()=>{
+    if(connectMode){
+      if(selA<0)selA=i;
+      else if(selA===i)selA=-1;
+      else{
+        const k=soft.findIndex(([x,y])=>(x===selA&&y===i)||(x===i&&y===selA));
+        if(k>=0)soft.splice(k,1);else soft.push([selA,i]);
+        selA=-1;lastSig='';
+      }
+      paintSel();return;
+    }
+    focused=(focused===i)?-1:i;layout();
+  };
+  document.body.appendChild(w);return w;
+});
+function paintSel(){wins.forEach((w,i)=>{w.style.outline=(connectMode&&i===selA)?'2px solid var(--amber)':'none';});}
+
+const ghost=document.getElementById('ghost'),status=document.getElementById('status');
+function layout(){
+  const R=regions();
+  APPS.forEach((a,i)=>{
+    let r=rectFor(i===focused?R[0]:R[HOMEOF[i]]);
+    if(i===focused&&(a.ff||a.fh)){
+      const fw=r.w*(a.ff||1),fh=r.h*(a.fh||1);
+      r={l:r.l+(r.w-fw)/2,t:r.t+(r.h-fh)/2,w:fw,h:fh};
+    }
+    const w=wins[i];
+    w.style.left=r.l+'px';w.style.top=r.t+'px';w.style.width=r.w+'px';w.style.height=r.h+'px';
+    w.style.zIndex=(i===focused)?30:20-R[HOMEOF[i]].t*5;
+    w.classList.toggle('focused',i===focused);
+    w.querySelector('.sz').textContent=(r.w/innerWidth*SCREEN_W_IN).toFixed(1)+'″';
+  });
+  if(focused>=0){
+    const r=rectFor(R[HOMEOF[focused]]);
+    ghost.style.display='flex';
+    ghost.style.left=r.l+'px';ghost.style.top=r.t+'px';
+    ghost.style.width=r.w+'px';ghost.style.height=r.h+'px';
+    ghost.textContent=APPS[focused].n+' — home';
+  }else ghost.style.display='none';
+  const fw=rectFor(R[0]).w/innerWidth*SCREEN_W_IN;
+  status.textContent='focal ≈ '+fw.toFixed(1)+'″ · gutter '+cfg.gutterIn.toFixed(2)+
+   '″ ≈ '+Math.round(cfg.gutterIn/SCREEN_W_IN*PX8K)+'px @8K · '+(HARD.length+soft.length)+' wires';
+}
+
+const $=id=>document.getElementById(id);
+$('sF').oninput=e=>{cfg.F=e.target.value/100;$('oF').textContent=e.target.value+'%';layout();};
+$('sB').oninput=e=>{cfg.B=e.target.value/100;$('oB').textContent=e.target.value+'%';layout();};
+$('sG').oninput=e=>{cfg.gutterIn=e.target.value/100;$('oG').textContent=(e.target.value/100).toFixed(2)+'″';layout();};
+$('cFlow').onchange=e=>flowOn=e.target.checked;
+$('cWires').onchange=e=>wiresOn=e.target.checked;
+$('bTab').onclick=()=>{focused=(focused+1)%APPS.length;layout();};
+function setConnect(v){connectMode=v;selA=-1;$('bConn').classList.toggle('on',v);paintSel();}
+$('bConn').onclick=()=>setConnect(!connectMode);
+$('bFull').onclick=()=>{document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();};
+$('bHelp').onclick=()=>{$('help').style.display='flex';};
+$('help').onclick=()=>{$('help').style.display='none';};
+$('collapse').onclick=e=>{e.stopPropagation();
+  const b=$('ctrlbody'),vis=b.style.display!=='none';
+  b.style.display=vis?'none':'block';$('collapse').textContent=vis?'+':'–';};
+addEventListener('keydown',e=>{
+  if(e.key==='Tab'){e.preventDefault();focused=(focused+1)%APPS.length;layout();}
+  else if(e.key==='Escape'){if(connectMode)setConnect(false);else{focused=-1;layout();}}
+  else if(e.key==='c'||e.key==='C')setConnect(!connectMode);
+  else if(e.key==='f'||e.key==='F')$('bFull').click();
+  else if(e.key==='?')$('help').style.display='flex';
+  else{
+    const map={'1':0,'2':1,'3':2,'4':3,'5':4,'6':5,'7':6,'8':7,'9':8,'0':9,'-':10,'=':11};
+    if(e.key in map){focused=map[e.key];layout();}
+  }
+});
+
+const cv=$('fx'),cx=cv.getContext('2d');
+const FLOWCOLS=['#7F77DD','#378ADD','#5DCAA5'];
+const CS=12;
+let P=[],paths=[],lastSig='';
+function initP(){P=Array.from({length:110},()=>({x:Math.random()*cv.width,y:Math.random()*cv.height,h:[]}));}
+function field(x,y,t){const s=.0035;return Math.sin(x*s+t*.3)+Math.cos(y*s*1.25-t*.2)+Math.sin((x+y)*s*.5+t*.12);}
+function getRects(){return wins.map(w=>{const r=w.getBoundingClientRect();return{l:r.left,t:r.top,w:r.width,h:r.height};});}
+const ZERO=new Uint8Array(0);
+function bfs(sx,sy,tx,ty,blk,occ,gw,gh){
+  const kk=(x,y)=>y*gw+x;
+  const prev=new Int32Array(gw*gh).fill(-1);
+  if(sx<0||sy<0||tx<0||ty<0||sx>=gw||sy>=gh||tx>=gw||ty>=gh)return null;
+  if(blk[kk(sx,sy)]||blk[kk(tx,ty)])return null;
+  const useOcc=occ.length>0;
+  const q=[[sx,sy,-1]];prev[kk(sx,sy)]=kk(sx,sy);
+  const DX=[1,-1,0,0],DY=[0,0,1,-1];let qi=0,found=false;
+  while(qi<q.length){
+    const[x,y,d]=q[qi++];
+    if(x===tx&&y===ty){found=true;break;}
+    const order=d<0?[0,1,2,3]:[d].concat([0,1,2,3].filter(i=>i!==d));
+    for(let oi=0;oi<4;oi++){const nd=order[oi],nx=x+DX[nd],ny=y+DY[nd];
+      if(nx<0||ny<0||nx>=gw||ny>=gh)continue;
+      const k=kk(nx,ny),o=nd<2?1:2;
+      if(blk[k]||prev[k]>=0)continue;
+      if(useOcc&&(occ[k]&o))continue;
+      prev[k]=kk(x,y);q.push([nx,ny,nd]);}
+  }
+  if(!found)return null;
+  let pts=[],k=kk(tx,ty);
+  while(k!==prev[k]){pts.push([k%gw,(k/gw)|0]);k=prev[k];}
+  pts.push([k%gw,(k/gw)|0]);pts.reverse();
+  const simp=[pts[0]];
+  for(let i=1;i<pts.length-1;i++){
+    const a=simp[simp.length-1],b=pts[i],c=pts[i+1];
+    if((a[0]===b[0]&&b[0]===c[0])||(a[1]===b[1]&&b[1]===c[1]))continue;
+    simp.push(b);}
+  simp.push(pts[pts.length-1]);
+  return{simp,full:pts};
+}
+function markOcc(occ,full,gw){
+  for(let i=1;i<full.length;i++){
+    const[ax,ay]=full[i-1],[bx,by]=full[i];
+    const o=ay===by?1:2;
+    occ[ay*gw+ax]|=o;occ[by*gw+bx]|=o;
+  }
+}
+function sideOf(r,other){
+  const dx=(other.l+other.w/2)-(r.l+r.w/2),dy=(other.t+other.h/2)-(r.t+r.h/2);
+  if(Math.abs(dx)>Math.abs(dy))return dx>0?'R':'L';
+  return dy>0?'B':'T';
+}
+function probe(bx,by,px,py,blk,gw,gh){
+  for(let step=1;step<14;step++){
+    for(const off of[0,1,-1,2,-2,3,-3]){
+      const gx=Math.floor((bx+px*(5+CS*step)+(py!==0?off*CS:0))/CS);
+      const gy=Math.floor((by+py*(5+CS*step)+(px!==0?off*CS:0))/CS);
+      if(gx>=0&&gy>=0&&gx<gw&&gy<gh&&!blk[gy*gw+gx])return{bx,by,gx,gy,px,py};
+    }
+  }
+  return{bx,by,gx:-1,gy:-1,px,py};
+}
+function updatePaths(){
+  const rects=getRects(),W=cv.width,H=cv.height;
+  const all=HARD.map(e=>[e[0],e[1],1]).concat(soft.map(e=>[e[0],e[1],0]));
+  const sig=rects.map(r=>(r.l|0)+','+(r.t|0)).join(';')+'|'+W+'|'+all.length;
+  if(sig===lastSig)return;lastSig=sig;
+  const gw=Math.ceil(W/CS),gh=Math.ceil(H/CS);
+  const blk=new Uint8Array(gw*gh),occ=new Uint8Array(gw*gh);
+  for(let y=0;y<gh;y++)for(let x=0;x<gw;x++)
+    if(x===0||y===0||x===gw-1||y===gh-1)blk[y*gw+x]=1;
+  rects.forEach(r=>{
+    const m=4;
+    const x0=Math.max(0,Math.floor((r.l-m)/CS)),x1=Math.min(gw-1,Math.floor((r.l+r.w+m)/CS));
+    const y0=Math.max(0,Math.floor((r.t-m)/CS)),y1=Math.min(gh-1,Math.floor((r.t+r.h+m)/CS));
+    for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++)blk[y*gw+x]=1;
+  });
+  const sides=all.map(([a,b])=>[sideOf(rects[a],rects[b]),sideOf(rects[b],rects[a])]);
+  const groups={};
+  all.forEach(([a,b],e)=>{
+    [[a,sides[e][0],b],[b,sides[e][1],a]].forEach(([w2,s,o],end)=>{
+      const key=w2+'|'+s;
+      (groups[key]=groups[key]||[]).push({e,end,
+        sv:(s==='L'||s==='R')?rects[o].t+rects[o].h/2:rects[o].l+rects[o].w/2});
+    });
+  });
+  const exits=all.map(()=>[null,null]);
+  Object.keys(groups).forEach(key=>{
+    const parts=key.split('|'),r=rects[+parts[0]],s=parts[1];
+    const g=groups[key].sort((p,q)=>p.sv-q.sv),n=g.length;
+    g.forEach((m,k)=>{
+      const f=(k+1)/(n+1);
+      let bx,by,px,py;
+      if(s==='R'){bx=r.l+r.w;by=r.t+r.h*f;px=1;py=0;}
+      else if(s==='L'){bx=r.l;by=r.t+r.h*f;px=-1;py=0;}
+      else if(s==='B'){by=r.t+r.h;bx=r.l+r.w*f;px=0;py=1;}
+      else{by=r.t;bx=r.l+r.w*f;px=0;py=-1;}
+      exits[m.e][m.end]=probe(bx,by,px,py,blk,gw,gh);
+    });
+  });
+  paths=all.map(([a,b,hard],e)=>{
+    const col=APPS[a].c;
+    const ea=exits[e][0],eb=exits[e][1];
+    let res=null;
+    if(ea.gx>=0&&eb.gx>=0){
+      res=bfs(ea.gx,ea.gy,eb.gx,eb.gy,blk,occ,gw,gh);
+      if(!res)res=bfs(ea.gx,ea.gy,eb.gx,eb.gy,blk,ZERO,gw,gh);
+    }
+    if(res)markOcc(occ,res.full,gw);
+    if(res){
+      const px=[[ea.bx,ea.by]].concat(res.simp.map(([x,y])=>[x*CS+CS/2,y*CS+CS/2])).concat([[eb.bx,eb.by]]);
+      return{px,col,hard,ok:true};
+    }
+    return{stubs:[[ea.bx,ea.by,ea.px,ea.py],[eb.bx,eb.by,eb.px,eb.py]],col,hard,ok:false};
+  });
+}
+function drawPath(px,r){
+  cx.beginPath();cx.moveTo(px[0][0],px[0][1]);
+  for(let i=1;i<px.length-1;i++)cx.arcTo(px[i][0],px[i][1],px[i+1][0],px[i+1][1],r);
+  cx.lineTo(px[px.length-1][0],px[px.length-1][1]);
+}
+let mp=35,mdir=.06;
+function tick(ts){
+  const t=ts/1000;
+  cx.clearRect(0,0,cv.width,cv.height);
+  if(flowOn){
+    P.forEach((p,i)=>{
+      const a=field(p.x,p.y,t)*Math.PI;
+      p.x+=Math.cos(a)*.55;p.y+=Math.sin(a)*.55;
+      if(p.x<0||p.x>cv.width||p.y<0||p.y>cv.height){p.x=Math.random()*cv.width;p.y=Math.random()*cv.height;p.h=[];}
+      p.h.push([p.x,p.y]);if(p.h.length>20)p.h.shift();
+      if(p.h.length>1){cx.beginPath();p.h.forEach(([x,y],j)=>j?cx.lineTo(x,y):cx.moveTo(x,y));
+      cx.strokeStyle=FLOWCOLS[i%3];cx.globalAlpha=.22;cx.lineWidth=1.3;cx.stroke();}
+    });
+  }
+  if(wiresOn){
+    updatePaths();
+    cx.lineJoin='round';cx.lineCap='round';
+    paths.forEach((w,e)=>{
+      cx.setLineDash([]);cx.strokeStyle=w.col;
+      if(w.ok){
+        drawPath(w.px,10);cx.globalAlpha=w.hard?.15:.10;cx.lineWidth=w.hard?6:5;cx.stroke();
+        drawPath(w.px,10);cx.globalAlpha=(w.hard?.6:.42)+.22*Math.sin(t*2+e*1.7);cx.lineWidth=w.hard?1.6:1.3;
+        cx.setLineDash(w.hard?[11,15]:[3,8]);cx.lineDashOffset=-t*26;cx.stroke();
+      }else{
+        w.stubs.forEach(([bx,by,px,py])=>{
+          cx.beginPath();cx.moveTo(bx,by);cx.lineTo(bx+px*12,by+py*12);
+          cx.globalAlpha=.3;cx.lineWidth=1.3;cx.stroke();
+        });
+      }
+    });
+    cx.setLineDash([]);
+  }
+  cx.globalAlpha=1;
+  mp+=mdir;if(mp>96||mp<2)mdir=-mdir;
+  const mb=document.getElementById('mprog');if(mb)mb.style.width=mp+'%';
+  requestAnimationFrame(tick);
+}
+function fit(){cv.width=innerWidth;cv.height=innerHeight;lastSig='';initP();layout();}
+addEventListener('resize',fit);
+fit();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
