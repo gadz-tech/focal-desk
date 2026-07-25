@@ -13,6 +13,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     BeginDeferWindowPos, DeferWindowPos, EndDeferWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
 };
 
+/// Cubic ease-out: fast start, gentle landing.
 pub fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
@@ -25,6 +26,7 @@ pub struct Flight {
     pub duration_ms: u64,
 }
 
+/// Integer interpolation with rounding.
 fn lerp(a: i32, b: i32, t: f32) -> i32 {
     a + ((b - a) as f32 * t).round() as i32
 }

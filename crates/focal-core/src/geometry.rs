@@ -10,6 +10,7 @@ pub struct Rect {
 }
 
 impl Rect {
+    /// Construct from origin and size.
     pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Self { x, y, w, h }
     }
@@ -17,15 +18,19 @@ impl Rect {
     pub fn inset(self, d: f32) -> Self {
         Self::new(self.x + d, self.y + d, self.w - 2.0 * d, self.h - 2.0 * d)
     }
+    /// Grow by `d` on every side (a negative inset).
     pub fn expand(self, d: f32) -> Self {
         self.inset(-d)
     }
+    /// X coordinate of the right edge.
     pub fn right(self) -> f32 {
         self.x + self.w
     }
+    /// Y coordinate of the bottom edge.
     pub fn bottom(self) -> f32 {
         self.y + self.h
     }
+    /// Midpoint of the rectangle.
     pub fn center(self) -> (f32, f32) {
         (self.x + self.w * 0.5, self.y + self.h * 0.5)
     }
@@ -38,6 +43,7 @@ impl Rect {
             h,
         )
     }
+    /// True when the point lies inside (right/bottom edges exclusive).
     pub fn contains(self, px: f32, py: f32) -> bool {
         px >= self.x && px < self.right() && py >= self.y && py < self.bottom()
     }

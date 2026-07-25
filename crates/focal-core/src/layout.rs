@@ -68,6 +68,7 @@ pub fn regions(cfg: &Config) -> [Region; SLOT_COUNT] {
     ]
 }
 
+/// Human-readable slot name for logs and the demo binary.
 pub fn slot_name(s: SlotId) -> &'static str {
     [
         "focal",

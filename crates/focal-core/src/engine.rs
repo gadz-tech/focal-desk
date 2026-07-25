@@ -45,6 +45,7 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// A fresh engine: inactive (laptop mode), managing nothing.
     pub fn new(cfg: Config) -> Self {
         Self {
             cfg,
@@ -67,16 +68,22 @@ impl Engine {
         }
     }
 
+    /// The window currently on the focal stage, if any.
     pub fn focused(&self) -> Option<WinId> {
         self.focused
     }
+    /// The home slot assigned to a managed window.
     pub fn home_of(&self, id: WinId) -> Option<SlotId> {
         self.homes.get(&id).copied()
     }
+    /// True in desk mode, i.e. the engine is issuing commands.
     pub fn is_active(&self) -> bool {
         self.active
     }
 
+    /// Desk-mode transition. Entering: every managed window flies to
+    /// its home, focus cleared. Leaving: every window is released back
+    /// to normal user control.
     fn set_active(&mut self, on: bool) -> Vec<Command> {
         self.active = on;
         let cfg = &self.cfg;
@@ -98,6 +105,9 @@ impl Engine {
         }
     }
 
+    /// Adopt a new window: home = the first matching rule's preferred
+    /// slot if free, else the first free slot center-out. With no free
+    /// slot the window stays unmanaged (floats).
     fn on_opened(&mut self, id: WinId, meta: WindowMeta) -> Vec<Command> {
         let rule = self.cfg.apps.iter().find(|r| r.matcher.matches(&meta));
         let fit = rule.and_then(|r| r.focal_fit);
@@ -130,6 +140,8 @@ impl Engine {
         }
     }
 
+    /// Put a window on the focal stage (shrunk to its fit hint) and
+    /// send the previously focused window back to its own home.
     fn on_promoted(&mut self, id: WinId) -> Vec<Command> {
         if !self.active || !self.homes.contains_key(&id) || self.focused == Some(id) {
             return Vec::new();
@@ -157,6 +169,9 @@ impl Engine {
         cmds
     }
 
+    /// Empty the stage: the focused window flies home; nothing focused.
+    /// Triggered by a hotkey or by the desktop itself becoming
+    /// foreground (decided: clicking the desk clears the stage).
     fn on_clear_stage(&mut self) -> Vec<Command> {
         let Some(id) = self.focused.take() else {
             return Vec::new();
@@ -171,6 +186,7 @@ impl Engine {
         }
     }
 
+    /// Forget a closed window and free its slot for reuse.
     fn on_closed(&mut self, id: WinId) -> Vec<Command> {
         if let Some(slot) = self.homes.remove(&id) {
             self.occupants.remove(&slot);
@@ -188,10 +204,12 @@ mod tests {
     use super::*;
     use crate::config::{AppRule, Matcher};
 
+    /// Shorthand: a WindowMeta with just a process name.
     fn meta(p: &str) -> WindowMeta {
         WindowMeta { process: p.into(), title: String::new() }
     }
 
+    /// An engine whose config gives terminals a 0.55-wide focal fit.
     fn engine_with_terminal_rule() -> (Engine, Config) {
         let mut cfg = Config::default();
         cfg.apps = vec![AppRule {

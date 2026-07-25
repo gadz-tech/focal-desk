@@ -15,6 +15,8 @@ use windows::core::PCWSTR;
 pub const DESK_W: u32 = 7680;
 pub const DESK_H: u32 = 4320;
 
+/// Walk the display topology; true when any active device is running
+/// the desk panel's 7680x4320 mode.
 pub fn desk_display_present() -> bool {
     let mut i = 0u32;
     loop {

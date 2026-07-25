@@ -11,6 +11,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
 };
 
+/// The callback Windows invokes on every foreground change, on the
+/// hook's own thread — it must stay tiny (post and return).
 pub unsafe extern "system" fn on_win_event(
     _hook: HWINEVENTHOOK,
     event: u32,
@@ -31,6 +33,9 @@ pub unsafe extern "system" fn on_win_event(
     }
 }
 
+/// Install the system-wide foreground hook. OUTOFCONTEXT means we're
+/// called in our own process (no DLL injection); SKIPOWNPROCESS keeps
+/// our own windows from feeding the loop.
 pub fn install() -> HWINEVENTHOOK {
     unsafe {
         SetWinEventHook(

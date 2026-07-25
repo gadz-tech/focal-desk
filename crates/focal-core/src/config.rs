@@ -14,6 +14,7 @@ pub struct Screen {
 }
 
 impl Screen {
+    /// Pixel density: horizontal pixels over physical width.
     pub fn px_per_inch(&self) -> f32 {
         self.px_w as f32 / self.inches_w
     }
@@ -32,6 +33,7 @@ pub struct Fit {
 }
 
 impl Default for Fit {
+    /// The default fit fills the stage exactly.
     fn default() -> Self {
         Self { w: 1.0, h: 1.0 }
     }
@@ -53,6 +55,7 @@ pub enum Matcher {
 }
 
 impl Matcher {
+    /// True when this matcher's glob matches the relevant window field.
     pub fn matches(&self, meta: &WindowMeta) -> bool {
         match self {
             Matcher::Process(g) => glob_match(g, &meta.process),
@@ -127,6 +130,8 @@ pub struct Config {
 }
 
 impl Default for Config {
+    /// The setup this project is built around: 65" 8K, 1.5" gutter,
+    /// 56% focal column, 22% bands, 1.2s dwell.
     fn default() -> Self {
         Self {
             screen: Screen::desk_65_8k(),
@@ -141,6 +146,7 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The structural gutter converted to pixels on the configured screen.
     pub fn gutter_px(&self) -> f32 {
         self.gutter_in * self.screen.px_per_inch()
     }

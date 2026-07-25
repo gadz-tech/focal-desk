@@ -44,6 +44,7 @@ pub struct Routed {
 const DX: [i32; 4] = [1, -1, 0, 0];
 const DY: [i32; 4] = [0, 0, 1, -1];
 
+/// Lane orientation bit for a move direction: 1 horizontal, 2 vertical.
 fn orient(dir: usize) -> u8 {
     if dir < 2 { 1 } else { 2 }
 }
@@ -68,6 +69,8 @@ struct Grid {
 }
 
 impl Grid {
+    /// Rasterize the screen: a border ring plus every window (expanded
+    /// by the clearance) becomes blocked cells.
     fn new(w: f32, h: f32, windows: &[Rect], clearance: f32) -> Self {
         let gw = (w / CELL).ceil() as i32;
         let gh = (h / CELL).ceil() as i32;
@@ -95,6 +98,7 @@ impl Grid {
         Self { gw, gh, blk }
     }
 
+    /// True when the cell is inside the grid and not blocked.
     fn free(&self, x: i32, y: i32) -> bool {
         x >= 0 && y >= 0 && x < self.gw && y < self.gh && !self.blk[(y * self.gw + x) as usize]
     }
@@ -195,6 +199,8 @@ fn bfs(grid: &Grid, occ: Option<&[u8]>, start: (i32, i32), goal: (i32, i32)) -> 
     Some(pts)
 }
 
+/// Stamp a routed path's cells with its lane orientation so later wires
+/// may cross it perpendicular but never run alongside in the same cells.
 fn mark(occ: &mut [u8], full: &[(i32, i32)], gw: i32) {
     for i in 1..full.len() {
         let (ax, ay) = full[i - 1];
@@ -205,6 +211,7 @@ fn mark(occ: &mut [u8], full: &[(i32, i32)], gw: i32) {
     }
 }
 
+/// Drop collinear midpoints, leaving only corners and endpoints.
 fn simplify(pts: &[(i32, i32)]) -> Vec<(i32, i32)> {
     if pts.len() < 3 {
         return pts.to_vec();

@@ -11,6 +11,8 @@
 //!       for cmd in engine.handle(Promoted(hwnd)):
 //!           start Flight (frame::compensate applied)
 //!   anim::tick(flights, now)
+//! if foreground is the shell/desktop window and dwell passes:
+//!   engine.handle(ClearStage)        // clicking the desk clears the stage
 //! on WM_DISPLAYCHANGE / WM_DEVICECHANGE:
 //!   engine.handle(DeskMode(dock::desk_display_present()))
 //! ```
@@ -22,6 +24,7 @@ use windows::Win32::Foundation::HWND;
 
 static FOREGROUND_TX: OnceLock<Sender<u64>> = OnceLock::new();
 
+/// Hand the hook a channel to post into; call once at startup.
 pub fn init_channel(tx: Sender<u64>) {
     let _ = FOREGROUND_TX.set(tx);
 }

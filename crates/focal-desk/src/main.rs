@@ -9,6 +9,8 @@ use focal_core::config::{AppRule, Config, Fit, Matcher, WindowMeta};
 use focal_core::engine::{Command, Engine, Event};
 use focal_core::layout;
 
+/// Runs the scripted demo: builds the desk config, feeds the engine a
+/// day-in-the-life event sequence, prints every command it returns.
 fn main() {
     println!("focal-desk — headless engine demo");
     println!("(the Windows adapter drives this exact engine with real events)\n");
