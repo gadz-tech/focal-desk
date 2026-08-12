@@ -9,8 +9,10 @@ use std::ffi::c_void;
 use focal_core::config::WindowMeta;
 use focal_core::geometry::Rect;
 use windows::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, MAX_PATH, RECT,
+    CloseHandle, GetLastError, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM,
+    MAX_PATH, RECT,
 };
+use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
@@ -18,8 +20,8 @@ use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromWindow, HMONITOR, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
 };
 use windows::Win32::System::Threading::{
-    CreateMutexW, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    CreateMutexW, GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW,
+    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
@@ -40,6 +42,32 @@ pub fn enable_dpi_awareness() {
     }
 }
 
+/// True when this process is running elevated.
+///
+/// Worth stating in the log: focal-desk can only move a window owned by
+/// an elevated process if it is elevated itself, so this one line
+/// explains why an admin terminal is sitting wherever it likes.
+pub fn is_elevated() -> bool {
+    unsafe {
+        let mut token = HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+            return false;
+        }
+        let mut info = TOKEN_ELEVATION::default();
+        let mut returned = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            Some(&mut info as *mut TOKEN_ELEVATION as *mut c_void),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned,
+        )
+        .is_ok();
+        let _ = CloseHandle(token);
+        ok && info.TokenIsElevated != 0
+    }
+}
+
 /// True when another focal-desk already holds the single-instance mutex.
 ///
 /// Matters because there are now two ways to start: the logon task and a
@@ -50,14 +78,19 @@ pub fn enable_dpi_awareness() {
 /// as the process, and Windows releases it on exit.
 pub fn already_running() -> bool {
     unsafe {
-        let existed = match CreateMutexW(None, true, windows::core::w!("focal-desk-single-instance"))
-        {
+        match CreateMutexW(None, true, windows::core::w!("focal-desk-single-instance")) {
             Ok(_handle) => GetLastError() == ERROR_ALREADY_EXISTS,
-            // If we cannot take the mutex at all, assume we are alone
-            // rather than refusing to start.
-            Err(_) => false,
-        };
-        existed
+            // Being unable to create the name is treated as "someone
+            // else holds it": a second service fighting the first is
+            // worse than one that declines to start.
+            //
+            // The elevated/non-elevated pair is *not* this case, despite
+            // the obvious guess — measured on Win11, a medium-integrity
+            // process opens an elevated instance's mutex with full access
+            // and lands on the Ok arm above. This arm is for the unusual
+            // case, not the everyday one.
+            Err(err) => err.code() == ERROR_ACCESS_DENIED.to_hresult(),
+        }
     }
 }
 

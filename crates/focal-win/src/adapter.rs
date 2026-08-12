@@ -454,6 +454,15 @@ pub fn run(cfg: Config, config_path: PathBuf) -> windows::core::Result<()> {
         service.known.len(),
         if service.engine.is_active() { "on" } else { "off" }
     ));
+    log::line(&format!(
+        "elevated: {} — {}",
+        if win::is_elevated() { "yes" } else { "no" },
+        if win::is_elevated() {
+            "windows of elevated apps move too"
+        } else {
+            "windows of elevated apps (an admin terminal) will not move"
+        }
+    ));
     log::line("running — Ctrl+Alt+Space clears the stage, Ctrl+Alt+D forces desk mode");
 
     let mut running = true;
