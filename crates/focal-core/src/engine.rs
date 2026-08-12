@@ -25,6 +25,10 @@ pub enum Event {
     ClearStage,
     /// Desk mode toggled: eGPU / 65" panel attached or removed.
     DeskMode(bool),
+    /// The config file changed on disk and reparsed cleanly. Carries the
+    /// whole new config; the adapter has already resolved `screen` from
+    /// the live display, so the engine adopts this verbatim.
+    Reconfigured(Config),
 }
 
 /// Everything the engine can ask the OS layer to do.
@@ -65,6 +69,7 @@ impl Engine {
             Event::Promoted(id) => self.on_promoted(id),
             Event::Closed(id) => self.on_closed(id),
             Event::ClearStage => self.on_clear_stage(),
+            Event::Reconfigured(cfg) => self.on_reconfigured(cfg),
         }
     }
 
@@ -90,6 +95,15 @@ impl Engine {
     /// docking) and re-place every managed window to match.
     pub fn set_screen(&mut self, screen: crate::config::Screen) -> Vec<Command> {
         self.cfg.screen = screen;
+        self.replace_all()
+    }
+
+    /// Re-place every managed window under the current config: the
+    /// focused one on the focal stage at its fit, everyone else at its
+    /// own home. Snaps rather than animates — this runs on resolution
+    /// changes and live config retunes, where a flight would only lag
+    /// behind the change. An inactive engine commands nothing.
+    fn replace_all(&self) -> Vec<Command> {
         if !self.active {
             return Vec::new();
         }
@@ -106,6 +120,17 @@ impl Engine {
                 Command::Place { win: id, to, animate: false }
             })
             .collect()
+    }
+
+    /// Adopt a new configuration and re-place everyone under it.
+    ///
+    /// Home assignments and focus deliberately survive: retuning the
+    /// gutter must not shuffle which app lives where, which is the whole
+    /// muscle-memory promise. A changed `[app]` rule therefore applies to
+    /// windows opened after the edit, not to ones already placed.
+    fn on_reconfigured(&mut self, cfg: Config) -> Vec<Command> {
+        self.cfg = cfg;
+        self.replace_all()
     }
 
     /// Desk-mode transition. Entering: every managed window flies to
@@ -347,6 +372,42 @@ mod tests {
         assert!(cmds.iter().all(|c| matches!(c, Command::Release(_))));
         // Inactive engine ignores promotion.
         assert!(e.handle(Event::Promoted(1)).is_empty());
+    }
+
+    #[test]
+    fn reconfigure_rescales_without_rehoming() {
+        let (mut e, cfg) = engine_with_terminal_rule();
+        e.handle(Event::DeskMode(true));
+        e.handle(Event::Opened(1, meta("a.exe")));
+        e.handle(Event::Opened(2, meta("windowsterminal.exe")));
+        let (home1, home2) = (e.home_of(1).unwrap(), e.home_of(2).unwrap());
+        e.handle(Event::Promoted(2));
+
+        // Widening the gutter is a pure geometry change — the kind a
+        // slider makes.
+        let mut wider = cfg.clone();
+        wider.gutter_in = cfg.gutter_in * 2.0;
+        let cmds = e.handle(Event::Reconfigured(wider.clone()));
+
+        assert_eq!(cmds.len(), 2, "every managed window is re-placed");
+        // Who lives where does not change under a retune.
+        assert_eq!(e.home_of(1), Some(home1));
+        assert_eq!(e.home_of(2), Some(home2));
+        assert_eq!(e.focused(), Some(2));
+        // The unfocused window sits at its own home, under the NEW gutter.
+        let home_rect = layout::window_rect(&wider, home1);
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, Command::Place { win: 1, to, .. } if *to == home_rect)),
+            "window 1 should be re-placed at its home under the new gutter"
+        );
+        // The focused one stays on the stage, still at its fit.
+        let stage = layout::focal_rect(&wider, Some(Fit { w: 0.55, h: 1.0 }));
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, Command::Place { win: 2, to, .. } if *to == stage)),
+            "window 2 should stay on the focal stage at its fit"
+        );
     }
 
     #[test]

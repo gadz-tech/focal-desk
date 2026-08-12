@@ -8,7 +8,8 @@ being bolted onto the side. This document is the map of those seams.
 ```text
             ┌─────────────────────────────────────────┐
  Win32      │  focal-win (adapter)                    │
- realities  │  hook · frame · anim · dock · adapter   │
+ realities  │  hook · frame · anim · dock              │
+            │  log · tray · adapter                    │
             └───────────────┬───────────▲─────────────┘
                      Event  │           │  Command
                             ▼           │
@@ -23,7 +24,10 @@ being bolted onto the side. This document is the map of those seams.
 the `Command`s that come back. That contract is the whole architecture:
 
 ```rust
-pub enum Event   { Opened(WinId, WindowMeta), Promoted(WinId), Closed(WinId), DeskMode(bool) }
+pub enum Event {
+    Opened(WinId, WindowMeta), Promoted(WinId), Closed(WinId),
+    ClearStage, DeskMode(bool), Reconfigured(Config),
+}
 pub enum Command { Place { win: WinId, to: Rect, animate: bool }, Release(WinId) }
 ```
 
@@ -88,6 +92,14 @@ adapter everywhere else. The four things worth knowing:
   `WM_DISPLAYCHANGE`/`WM_DEVICECHANGE`; transitions become `Event::DeskMode`,
   and undocking releases every window (`Command::Release`) — the service is
   inert on the laptop.
+- **`tray.rs`** — the only UI. The binary is windowless (a console has a resize
+  border, so the service would tile its own console), so the icon is what says
+  it is running, and `log.rs` is what says what it is doing. Both hang off the
+  same hidden window as the hotkeys.
+
+Config edits reload live: the adapter watches the file's mtime on the same
+400 ms tick as the window rescan and sends `Event::Reconfigured`. That is the
+seam a settings GUI would use — write the file, and the layout follows.
 
 Also planned in this layer: the wallpaper renderer (flow field + wires drawn on
 the WorkerW layer behind windows), fed by the same engine state.

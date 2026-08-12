@@ -10,6 +10,8 @@
 //! - [`anim`]    — the ease-out flight between rectangles
 //! - [`dock`]    — desk-mode detection (is the big panel present?)
 //! - [`win`]     — small safe wrappers over the raw Win32 calls
+//! - [`log`]     — the log file, since the service has no console
+//! - [`tray`]    — the notification-area icon and its menu
 //! - [`adapter`] — the service loop that ties it together
 
 #[cfg(windows)]
@@ -22,6 +24,10 @@ pub mod dock;
 pub mod frame;
 #[cfg(windows)]
 pub mod hook;
+#[cfg(windows)]
+pub mod log;
+#[cfg(windows)]
+pub mod tray;
 #[cfg(windows)]
 pub mod win;
 

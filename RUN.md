@@ -16,8 +16,30 @@
    First build takes a few minutes (it compiles the `windows` crate). Later
    builds are seconds.
 
-3. **Watch the console.** It prints the config path, whether desk mode is on,
-   and how many windows it is managing.
+3. **Look in the tray, and read the log.** The service runs windowless — a
+   console window has a resize border, so focal-desk would tile its own console
+   into a home slot. Instead there is a notification-area icon (hover it for
+   desk mode and the window count) and a log beside the executable:
+
+   ```
+   Get-Content C:\Dev\focal-desk\target\release\focal-desk.log -Wait
+   ```
+
+   Windows 11 files new tray icons under the taskbar's `^` overflow. Drag it
+   onto the taskbar to keep it in sight.
+
+## Start it at logon
+
+```
+powershell -ExecutionPolicy Bypass -File C:\Dev\focal-desk\install-task.ps1
+```
+
+Registers a scheduled task that starts focal-desk 15 seconds after you log in,
+elevated so it can move admin windows too. It asks for administrator rights and
+will prompt. `install-task.ps1 -Remove` undoes it.
+
+Only one focal-desk runs at a time — a second launch notices the first and
+exits, so the logon task and a manual run cannot end up fighting each other.
 
 ## What you should see
 
@@ -26,16 +48,28 @@
 - Click a window — after `dwell_ms` (1.2s by default) it flies to the focal
   stage and the previous occupant returns to its own home.
 - Click the desktop to clear the stage.
-- `Ctrl+Alt+Space` also clears the stage.
-- `Ctrl+Alt+D` forces desk mode on or off — **use this to try it on the laptop
-  screen** before the panel is connected.
-- Quit with `Ctrl+C` in the console. Windows stay where they are; nothing is
-  permanent.
+- `Ctrl+Alt+Space` also clears the stage, as does **Clear stage** on the tray
+  menu.
+- `Ctrl+Alt+D` forces desk mode **on** — it does not turn it off. Use it to try
+  the layout on the laptop screen before the panel is connected; with the panel
+  attached, desk mode is already on and the key does nothing.
+- Quit from the tray menu. Windows stay where they are; nothing is permanent.
 
 ## Tuning
 
 A `focal-desk.conf` is written next to the executable
-(`target\release\focal-desk.conf`) on first run. Edit it and restart:
+(`target\release\focal-desk.conf`) on first run. **Edits apply on save** — no
+restart, no need to quit; the layout re-flows within about half a second, which
+makes the geometry knobs something you can dial in by feel.
+
+If an edit doesn't parse, focal-desk keeps the configuration it is already
+running and writes the offending line to the log — it will not silently drop
+back to defaults and lose your `[app]` rules.
+
+One caveat: `gutter_in`, `focal_frac`, `band_frac` and `dwell_ms` take effect
+immediately, but a changed `home` or `focal_fit` applies to windows opened
+*after* the edit. Re-homing windows already on screen is exactly the
+muscle-memory breakage the layout exists to prevent.
 
 ```
 gutter_in          = 1.5    # structural gap; actively resizes windows
@@ -57,8 +91,11 @@ Slots: `focal`, `left-top`, `left-bottom`, `right-top`, `right-bottom`,
 
 ## Known rough edges (v0.1)
 
-- **Elevated windows won't move** unless focal-desk also runs elevated. Run the
-  console as administrator if you keep an admin terminal open.
+- **Elevated windows won't move** unless focal-desk also runs elevated. The
+  logon task above already does; a manual launch does not.
+- **`focal-desk.conf`, the log and the executable all live in `target\release\`,
+  so `cargo clean` deletes your tuning** and breaks the scheduled task's path.
+  Keep a copy of the conf once you've dialled it in.
 - **Apps with minimum sizes** (some installers, Slack's mini player) may refuse
   their slot rect and sit oversized. They are still usable; the layout just
   isn't exact for them.

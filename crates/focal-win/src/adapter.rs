@@ -14,11 +14,12 @@
 //! *how* to ask Windows, never *what* to do.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
-use focal_core::config::{Config, Screen};
+use focal_core::config::{self, Config, Screen};
 use focal_core::engine::{Command, Engine, Event, WinId};
 use focal_core::geometry::Rect;
 
@@ -31,12 +32,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetForegroundWindow, PeekMessageW,
     RegisterClassW, TranslateMessage, CW_USEDEFAULT, MSG, PM_REMOVE, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_HOTKEY, WNDCLASSW,
+    WINDOW_STYLE, WM_DEVICECHANGE, WM_DISPLAYCHANGE, WM_HOTKEY, WM_RBUTTONUP, WNDCLASSW,
 };
 
 use crate::anim::{self, Flight};
 use crate::dock;
 use crate::frame;
+use crate::log;
+use crate::tray;
 use crate::win;
 
 /// Notifications posted from callbacks into the main loop.
@@ -48,6 +51,8 @@ pub enum Note {
     DisplaysChanged,
     /// A registered hotkey fired.
     Hotkey(i32),
+    /// The user picked something from the tray menu.
+    Menu(u32),
 }
 
 /// Hotkey id: clear the focal stage (Ctrl+Alt+Space).
@@ -66,8 +71,8 @@ pub fn post(note: Note) {
     }
 }
 
-/// Window procedure for our hidden window: the only messages we care
-/// about are display/device changes and hotkeys.
+/// Window procedure for our hidden window: display/device changes,
+/// hotkeys, and the tray icon's callback all arrive here.
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -81,6 +86,15 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_HOTKEY => {
             post(Note::Hotkey(wparam.0 as i32));
+            LRESULT(0)
+        }
+        // The tray icon reports the mouse message in lparam. The menu is
+        // opened here, on the UI thread, because TrackPopupMenu runs its
+        // own modal loop and must own the message pump while it does.
+        tray::CALLBACK => {
+            if lparam.0 as u32 == WM_RBUTTONUP {
+                post(Note::Menu(tray::show_menu(hwnd)));
+            }
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -169,12 +183,28 @@ struct Service {
     /// one event per activation.
     promoted_pending: bool,
     forced: bool,
+    /// The config file we watch for live edits.
+    config_path: PathBuf,
+    /// Its modification time as of the last successful read, so an
+    /// untouched file costs one `stat` per tick and nothing more.
+    config_seen: Option<SystemTime>,
+    /// Our hidden window, which owns the tray icon.
+    hwnd: HWND,
+    /// The tooltip currently showing, so we only talk to the shell when
+    /// the text actually changes.
+    tip: String,
 }
 
 impl Service {
-    /// Build the service around an engine and the monitor it manages.
-    fn new(cfg: Config) -> Self {
+    /// Build the service around an engine, the monitor it manages, and
+    /// the config file it watches.
+    fn new(cfg: Config, config_path: PathBuf, hwnd: HWND) -> Self {
         let forced = cfg.force_active;
+        // Record the file's current stamp so the first tick doesn't read
+        // the config we were just handed back off disk.
+        let config_seen = std::fs::metadata(&config_path)
+            .and_then(|m| m.modified())
+            .ok();
         Self {
             engine: Engine::new(cfg),
             origin: (0.0, 0.0),
@@ -184,6 +214,63 @@ impl Service {
             pending: None,
             promoted_pending: false,
             forced,
+            config_path,
+            config_seen,
+            hwnd,
+            tip: String::new(),
+        }
+    }
+
+    /// Hover text for the tray icon: the two things worth knowing at a
+    /// glance — which mode it is in, and how much it is managing.
+    fn tray_tip(&self) -> String {
+        format!(
+            "focal-desk — desk mode {} · {} of {} windows",
+            if self.engine.is_active() { "on" } else { "off" },
+            self.managed_count(),
+            self.known.len()
+        )
+    }
+
+    /// Push the tooltip to the shell, but only when it actually changed.
+    /// This runs on every poll, so the comparison is the point.
+    fn update_tray(&mut self) {
+        let tip = self.tray_tip();
+        if self.tip != tip {
+            tray::set_tip(self.hwnd, &tip);
+            self.tip = tip;
+        }
+    }
+
+    /// Re-read the config file when it changes on disk, so tuning the
+    /// gutter is a save rather than a restart.
+    ///
+    /// A bad edit keeps the configuration already running. The previous
+    /// behavior — falling back to `Config::default()` — silently threw
+    /// away every `[app]` rule over a single typo.
+    fn check_config(&mut self) {
+        let Ok(stamp) = std::fs::metadata(&self.config_path).and_then(|m| m.modified()) else {
+            return;
+        };
+        if self.config_seen == Some(stamp) {
+            return;
+        }
+        self.config_seen = Some(stamp);
+        let Ok(text) = std::fs::read_to_string(&self.config_path) else {
+            return;
+        };
+        match config::parse(&text) {
+            Ok(mut cfg) => {
+                // The file says how big the panel is; the panel says how
+                // many pixels it has. The gutter needs both, so re-derive
+                // the screen rather than trusting the parsed default.
+                let (monitor, _) = dock::managed_monitor();
+                cfg.screen =
+                    Screen::from_px(monitor.w as u32, monitor.h as u32, cfg.screen_diagonal_in);
+                self.dispatch(Event::Reconfigured(cfg));
+                log::line("config reloaded");
+            }
+            Err(err) => log::line(&format!("config error, keeping previous config: {err}")),
         }
     }
 
@@ -322,18 +409,26 @@ impl Service {
         let active = is_desk || self.forced;
         if active != self.engine.is_active() {
             self.dispatch(Event::DeskMode(active));
-            println!(
+            log::line(&format!(
                 "desk mode {} ({}x{})",
                 if active { "on" } else { "off" },
                 monitor.w as u32,
                 monitor.h as u32
-            );
+            ));
+            self.update_tray();
         }
     }
 }
 
 /// Run the service until the process is killed.
-pub fn run(cfg: Config) -> windows::core::Result<()> {
+pub fn run(cfg: Config, config_path: PathBuf) -> windows::core::Result<()> {
+    // The logon task and a manual launch would otherwise put two services
+    // on one desktop, each undoing the other's placements.
+    if win::already_running() {
+        log::line("another focal-desk is already running — this one is exiting");
+        return Ok(());
+    }
+
     let (tx, rx): (Sender<Note>, Receiver<Note>) = channel();
     let _ = NOTES.set(tx);
 
@@ -342,22 +437,28 @@ pub fn run(cfg: Config) -> windows::core::Result<()> {
     register_hotkeys(hwnd);
     let _hook = crate::hook::install();
 
-    let mut service = Service::new(cfg);
+    let mut service = Service::new(cfg, config_path, hwnd);
+    if tray::add(hwnd, "focal-desk — starting") {
+        log::line("tray icon added (Windows 11 files new icons under the taskbar's ^ overflow)");
+    } else {
+        log::line("tray icon REFUSED by the shell — the service is running but invisible");
+    }
     service.refresh_displays();
     // The rescan is what places whatever was already open: every window
     // it announces comes straight back as a `Place` when active.
     service.rescan();
-    println!(
+    service.update_tray();
+    log::line(&format!(
         "managing {} of {} windows (desk mode {})",
         service.managed_count(),
         service.known.len(),
         if service.engine.is_active() { "on" } else { "off" }
-    );
+    ));
+    log::line("running — Ctrl+Alt+Space clears the stage, Ctrl+Alt+D forces desk mode");
 
-    println!("focal-desk running — Ctrl+Alt+Space clears the stage, Ctrl+Alt+D toggles desk mode");
-
+    let mut running = true;
     let mut last_scan = Instant::now();
-    loop {
+    while running {
         pump_messages();
 
         while let Ok(note) = rx.try_recv() {
@@ -370,6 +471,10 @@ pub fn run(cfg: Config) -> windows::core::Result<()> {
                     service.refresh_displays();
                 }
                 Note::Hotkey(_) => {}
+                Note::Menu(tray::CMD_CLEAR) => service.dispatch(Event::ClearStage),
+                Note::Menu(tray::CMD_LOG) => tray::open_log(),
+                Note::Menu(tray::CMD_QUIT) => running = false,
+                Note::Menu(_) => {}
             }
         }
 
@@ -377,12 +482,20 @@ pub fn run(cfg: Config) -> windows::core::Result<()> {
 
         if last_scan.elapsed() >= Duration::from_millis(400) {
             last_scan = Instant::now();
+            service.check_config();
             if service.engine.is_active() {
                 service.rescan();
             }
+            service.update_tray();
         }
 
         service.flights = anim::tick(std::mem::take(&mut service.flights), Instant::now());
         std::thread::sleep(Duration::from_millis(8));
     }
+
+    // Leave nothing behind: an icon that outlives its process sits in the
+    // tray until the user happens to hover it.
+    tray::remove(hwnd);
+    log::line("quit — windows stay where they are");
+    Ok(())
 }

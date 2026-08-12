@@ -8,7 +8,9 @@ use std::ffi::c_void;
 
 use focal_core::config::WindowMeta;
 use focal_core::geometry::Rect;
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, MAX_PATH, RECT};
+use windows::Win32::Foundation::{
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HWND, LPARAM, MAX_PATH, RECT,
+};
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
@@ -16,7 +18,8 @@ use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromWindow, HMONITOR, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
 };
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    CreateMutexW, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
@@ -34,6 +37,27 @@ use windows::core::{BOOL, PWSTR};
 pub fn enable_dpi_awareness() {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+}
+
+/// True when another focal-desk already holds the single-instance mutex.
+///
+/// Matters because there are now two ways to start: the logon task and a
+/// manual launch. Two services on one desktop would fight over every
+/// placement and leave two icons in the tray.
+///
+/// The mutex handle is deliberately never closed — it has to live as long
+/// as the process, and Windows releases it on exit.
+pub fn already_running() -> bool {
+    unsafe {
+        let existed = match CreateMutexW(None, true, windows::core::w!("focal-desk-single-instance"))
+        {
+            Ok(_handle) => GetLastError() == ERROR_ALREADY_EXISTS,
+            // If we cannot take the mutex at all, assume we are alone
+            // rather than refusing to start.
+            Err(_) => false,
+        };
+        existed
     }
 }
 

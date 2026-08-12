@@ -3,15 +3,41 @@
 //! On Windows this runs the real service. Everywhere else it runs a
 //! narrated headless demo of the same engine, which doubles as living
 //! documentation: `cargo run` and read the output.
+//!
+//! The Windows build is windowless. A console window has a resize
+//! border, so the service would tile its own console into a home slot
+//! and then promote it when clicked; the tray icon says that it is
+//! running and `focal-desk.log` says what it is doing.
+
+// Guarded so the non-Windows demo below still prints to a terminal.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 use focal_core::config::{self, Config};
 
-/// Path of the config file that sits beside the executable.
-fn config_path() -> std::path::PathBuf {
+/// Path of a file that sits beside the executable.
+fn beside_exe(name: &str) -> std::path::PathBuf {
     std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("focal-desk.conf")))
-        .unwrap_or_else(|| std::path::PathBuf::from("focal-desk.conf"))
+        .and_then(|exe| exe.parent().map(|dir| dir.join(name)))
+        .unwrap_or_else(|| std::path::PathBuf::from(name))
+}
+
+/// Path of the config file.
+fn config_path() -> std::path::PathBuf {
+    beside_exe("focal-desk.conf")
+}
+
+/// Report a startup message. On Windows there is no console to print to,
+/// so it goes to the log; elsewhere it goes to stdout.
+#[cfg(windows)]
+fn say(msg: &str) {
+    focal_win::log::line(msg);
+}
+
+/// Report a startup message on non-Windows hosts, where stdout exists.
+#[cfg(not(windows))]
+fn say(msg: &str) {
+    println!("{msg}");
 }
 
 /// Load the config beside the executable, writing a commented example
@@ -21,18 +47,18 @@ fn load_config() -> Config {
     match std::fs::read_to_string(&path) {
         Ok(text) => match config::parse(&text) {
             Ok(cfg) => {
-                println!("config: {}", path.display());
+                say(&format!("config: {}", path.display()));
                 cfg
             }
             Err(err) => {
-                eprintln!("config error in {}: {err}", path.display());
-                eprintln!("falling back to defaults");
+                say(&format!("config error in {}: {err}", path.display()));
+                say("falling back to defaults — every [app] rule is ignored until this is fixed");
                 Config::default()
             }
         },
         Err(_) => {
             let _ = std::fs::write(&path, config::EXAMPLE);
-            println!("wrote starter config: {}", path.display());
+            say(&format!("wrote starter config: {}", path.display()));
             config::parse(config::EXAMPLE).unwrap_or_default()
         }
     }
@@ -41,9 +67,11 @@ fn load_config() -> Config {
 /// Start the Windows service.
 #[cfg(windows)]
 fn main() {
+    // Before anything that might want to report a problem.
+    focal_win::log::init(beside_exe("focal-desk.log"));
     let cfg = load_config();
-    if let Err(err) = focal_win::adapter::run(cfg) {
-        eprintln!("focal-desk stopped: {err}");
+    if let Err(err) = focal_win::adapter::run(cfg, config_path()) {
+        focal_win::log::line(&format!("focal-desk stopped: {err}"));
     }
 }
 
