@@ -72,8 +72,9 @@ layout changes, which is only on promotion — idle cost is zero.
 
 ## The Win32 layer (`focal-win`)
 
-Reference code today, gated behind the `win32` feature; enable on a Windows
-machine (dep instructions in its Cargo.toml). The four things worth knowing:
+Compiled and smoke-tested on Windows. Its modules are gated on `cfg(windows)`
+(not a Cargo feature), so the crate is an empty shell on Linux CI and the real
+adapter everywhere else. The four things worth knowing:
 
 - **`hook.rs`** — one `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` is the entire
   input side. Activation is the gesture; there is no other UI.
@@ -94,4 +95,5 @@ the WorkerW layer behind windows), fed by the same engine state.
 ## CI
 
 GitHub Actions runs `cargo test --workspace` on Linux and Windows for every
-push. The Windows job is what really compiles the adapter once `win32` is on.
+push. The Windows job is what really compiles the adapter, since everything in
+`focal-win` sits behind `cfg(windows)`.

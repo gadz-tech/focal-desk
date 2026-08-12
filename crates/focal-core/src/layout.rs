@@ -87,6 +87,14 @@ pub fn slot_name(s: SlotId) -> &'static str {
     ][s.0 as usize]
 }
 
+/// Look up a slot by its human-readable name (as used in config files).
+pub fn slot_from_name(name: &str) -> Option<SlotId> {
+    let n = name.trim().to_lowercase();
+    (0..SLOT_COUNT as u8)
+        .map(SlotId)
+        .find(|&s| slot_name(s) == n)
+}
+
 /// Home assignment order for windows without an explicit slot:
 /// center-out — sides first, then bands, corners last.
 pub fn home_priority() -> [SlotId; 12] {
@@ -140,6 +148,15 @@ mod tests {
         assert!(((focal.y - t1.bottom()) - g).abs() < 0.5);
         // screen edge: half a gutter
         assert!((l1.x - g / 2.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn slot_names_round_trip() {
+        for i in 0..SLOT_COUNT as u8 {
+            let s = SlotId(i);
+            assert_eq!(slot_from_name(slot_name(s)), Some(s));
+        }
+        assert_eq!(slot_from_name("nonsense"), None);
     }
 
     #[test]

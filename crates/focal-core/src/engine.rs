@@ -81,6 +81,33 @@ impl Engine {
         self.active
     }
 
+    /// Read-only view of the active configuration.
+    pub fn config(&self) -> &Config {
+        &self.cfg
+    }
+
+    /// Adopt a new screen (resolution learned at runtime, or changed by
+    /// docking) and re-place every managed window to match.
+    pub fn set_screen(&mut self, screen: crate::config::Screen) -> Vec<Command> {
+        self.cfg.screen = screen;
+        if !self.active {
+            return Vec::new();
+        }
+        let focused = self.focused;
+        let cfg = &self.cfg;
+        self.homes
+            .iter()
+            .map(|(&id, &slot)| {
+                let to = if Some(id) == focused {
+                    layout::focal_rect(cfg, self.fits.get(&id).copied().flatten())
+                } else {
+                    layout::window_rect(cfg, slot)
+                };
+                Command::Place { win: id, to, animate: false }
+            })
+            .collect()
+    }
+
     /// Desk-mode transition. Entering: every managed window flies to
     /// its home, focus cleared. Leaving: every window is released back
     /// to normal user control.
@@ -259,6 +286,21 @@ mod tests {
         // foreground; nothing may move.
         assert!(e.handle(Event::Promoted(1)).is_empty());
         assert_eq!(e.focused(), Some(1));
+    }
+
+    #[test]
+    fn set_screen_replaces_everyone() {
+        let (mut e, _) = engine_with_terminal_rule();
+        e.handle(Event::DeskMode(true));
+        e.handle(Event::Opened(1, meta("a.exe")));
+        e.handle(Event::Opened(2, meta("b.exe")));
+        e.handle(Event::Promoted(2));
+        let cmds = e.set_screen(crate::config::Screen::from_px(3840, 2160, 65.0));
+        assert_eq!(cmds.len(), 2, "every managed window is re-placed");
+        // the focused window goes to the (new) focal stage
+        let stage = layout::focal_rect(e.config(), Some(Fit { w: 1.0, h: 1.0 }));
+        assert!(cmds.iter().any(|c| matches!(
+            c, Command::Place { win: 2, to, .. } if (to.w - stage.w).abs() < 1.0)));
     }
 
     #[test]

@@ -1,32 +1,29 @@
 //! focal-win — the Windows adapter.
 //!
-//! This crate's whole job is translation: real Win32 happenings become
-//! `focal_core::engine::Event`s, and `Command`s coming back become
-//! actual window moves. The interesting logic lives in focal-core; the
-//! interesting *dangers* live here, documented per-module:
+//! Its whole job is translation: Win32 happenings become
+//! `focal_core::engine::Event`s, and the `Command`s that come back
+//! become real window moves. The interesting logic lives in focal-core;
+//! the interesting *hazards* live here:
 //!
-//! - [`hook`]  — the WinEvent foreground hook (the entire input side)
-//! - [`frame`] — DWM invisible-border compensation (why naive
-//!   SetWindowPos leaves ragged gutters)
-//! - [`anim`]  — the ease-out flight between rects
-//! - [`dock`]  — desk-mode detection (eGPU / 65" present?)
-//! - [`adapter`] — the message loop tying it together, incl. the dwell
-//!   timer that turns raw focus changes into `Promoted` events
-//!
-//! Modules are gated behind the `win32` feature (see Cargo.toml) so the
-//! workspace builds and tests everywhere today; enable it from a
-//! Windows machine when it's time to run for real.
+//! - [`hook`]    — the WinEvent foreground hook (the entire input side)
+//! - [`frame`]   — DWM invisible-border compensation
+//! - [`anim`]    — the ease-out flight between rectangles
+//! - [`dock`]    — desk-mode detection (is the big panel present?)
+//! - [`win`]     — small safe wrappers over the raw Win32 calls
+//! - [`adapter`] — the service loop that ties it together
 
-#[cfg(all(windows, feature = "win32"))]
+#[cfg(windows)]
 pub mod adapter;
-#[cfg(all(windows, feature = "win32"))]
+#[cfg(windows)]
 pub mod anim;
-#[cfg(all(windows, feature = "win32"))]
+#[cfg(windows)]
 pub mod dock;
-#[cfg(all(windows, feature = "win32"))]
+#[cfg(windows)]
 pub mod frame;
-#[cfg(all(windows, feature = "win32"))]
+#[cfg(windows)]
 pub mod hook;
+#[cfg(windows)]
+pub mod win;
 
 /// True when compiled for the platform this adapter targets.
 pub fn platform_ready() -> bool {

@@ -11,8 +11,13 @@ jobs:
       - uses: actions/checkout@v4
       - run: cargo test --workspace --verbose
 
-  test-windows:
+  build-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - run: cargo test --workspace --verbose
+      - run: cargo build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: focal-desk-exe
+          path: target/release/focal-desk.exe

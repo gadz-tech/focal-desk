@@ -1,40 +1,38 @@
-//! KEY SNIPPET 1 — the entire input side of the product is one hook.
+//! The foreground hook — the entire input side of the product.
 //!
 //! `SetWinEventHook(EVENT_SYSTEM_FOREGROUND, ..)` fires whenever any
-//! window becomes the foreground window — click, alt-tab, taskbar,
-//! app launch. That means promotion needs no gesture of its own:
-//! activation IS the gesture.
+//! window becomes the foreground window: click, alt-tab, taskbar, app
+//! launch. That is why focal-desk needs no gesture of its own —
+//! activation *is* the gesture.
 
 use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
+use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::WindowsAndMessaging::{
     EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
 };
 
-/// The callback Windows invokes on every foreground change, on the
-/// hook's own thread — it must stay tiny (post and return).
-pub unsafe extern "system" fn on_win_event(
+use crate::adapter::{post, Note};
+
+/// Callback Windows invokes on every foreground change, on the hook's
+/// own thread. It must stay tiny: post the window id and return, so all
+/// real work happens on the main loop.
+unsafe extern "system" fn on_win_event(
     _hook: HWINEVENTHOOK,
     event: u32,
     hwnd: HWND,
-    _id_object: i32,
+    id_object: i32,
     _id_child: i32,
-    _event_thread: u32,
+    _thread: u32,
     _time_ms: u32,
 ) {
-    if event == EVENT_SYSTEM_FOREGROUND {
-        // Rule: do almost nothing in the callback. It runs with tight
-        // timing constraints, and calling into the engine here would
-        // mean locking. Post the hwnd to the adapter's channel; the
-        // dwell timer lives in the message loop, and only when the
-        // window has held focus for cfg.dwell_ms does the loop send
-        // Event::Promoted(hwnd.0 as u64) into the engine.
-        crate::adapter::post_foreground(hwnd);
+    // OBJID_WINDOW (0) only: ignore caret/menu child notifications.
+    if event == EVENT_SYSTEM_FOREGROUND && id_object == 0 && !hwnd.is_invalid() {
+        post(Note::Foreground(hwnd.0 as u64));
     }
 }
 
-/// Install the system-wide foreground hook. OUTOFCONTEXT means we're
-/// called in our own process (no DLL injection); SKIPOWNPROCESS keeps
+/// Install the system-wide foreground hook. `OUTOFCONTEXT` keeps the
+/// callback in our process (no DLL injection); `SKIPOWNPROCESS` stops
 /// our own windows from feeding the loop.
 pub fn install() -> HWINEVENTHOOK {
     unsafe {
@@ -43,8 +41,8 @@ pub fn install() -> HWINEVENTHOOK {
             EVENT_SYSTEM_FOREGROUND,
             None,
             Some(on_win_event),
-            0, // all processes
-            0, // all threads
+            0,
+            0,
             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
         )
     }

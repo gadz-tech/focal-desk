@@ -13,5 +13,8 @@ Conventions for anyone (human or Claude) working this repo:
 - **Run `cargo test --workspace` before pushing.** CI runs Linux and Windows.
 - Decided: clicking the desktop (shell window foreground past dwell) maps to
   `Event::ClearStage`. Clicking the focused window is a no-op (test-pinned).
-- The Win32 layer (`focal-win`) is reference code behind the `win32` feature
-  until first built on a real Windows machine.
+- The Win32 layer (`focal-win`) is gated on `cfg(windows)`, not a Cargo feature:
+  Linux CI compiles an empty crate, Windows compiles the real adapter. It has
+  been built and smoke-tested on the 8K panel.
+- `win::is_manageable` is the one place that decides what focal-desk owns. Keep
+  it conservative — a window that cannot be resized cannot be tiled.
