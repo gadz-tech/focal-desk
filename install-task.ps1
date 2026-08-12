@@ -12,11 +12,25 @@
 param(
     # Remove the task instead of creating it.
     [switch]$Remove,
-    # Path to the built executable. Defaults to the release build beside this script.
-    [string]$Exe = (Join-Path $PSScriptRoot 'target\release\focal-desk.exe')
+    # Path to the built executable. Defaults to the release build beside
+    # this script; resolved in the body, not here, because Windows
+    # PowerShell 5.1 does not populate $PSScriptRoot inside param defaults.
+    [string]$Exe
 )
 
 $TaskName = 'focal-desk'
+
+# Where this script lives, with fallbacks for the hosts that leave one or
+# both of the automatic variables empty.
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot }
+             elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath }
+             else { (Get-Location).Path }
+
+if (-not $Exe) { $Exe = Join-Path $ScriptDir 'target\release\focal-desk.exe' }
+
+# Same reasoning for the script's own path, which the elevated relaunch needs.
+$ScriptPath = if ($PSCommandPath) { $PSCommandPath }
+              else { Join-Path $ScriptDir 'install-task.ps1' }
 
 # True when this process already holds administrator rights.
 function Test-Admin {
@@ -27,7 +41,7 @@ function Test-Admin {
 
 # Re-launch this script elevated, forwarding the arguments we were given.
 function Invoke-Elevated {
-    $argList = @('-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+    $argList = @('-ExecutionPolicy', 'Bypass', '-File', "`"$ScriptPath`"")
     if ($Remove) { $argList += '-Remove' }
     $argList += @('-Exe', "`"$Exe`"")
     Write-Host 'Needs administrator rights - accept the prompt.' -ForegroundColor Yellow
