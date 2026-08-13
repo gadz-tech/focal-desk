@@ -13,7 +13,7 @@
 //! Everything policy-shaped lives in `focal-core`; this file only knows
 //! *how* to ask Windows, never *what* to do.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::OnceLock;
@@ -161,16 +161,22 @@ fn pump_messages() {
     }
 }
 
+/// True when two rectangles match to within a pixel. The tolerance
+/// absorbs the float-to-integer rounding that `SetWindowPos` forces, so
+/// a window already in place is not nudged by half a pixel forever.
+fn nearly(a: Rect, b: Rect) -> bool {
+    (a.x - b.x).abs() < 1.5
+        && (a.y - b.y).abs() < 1.5
+        && (a.w - b.w).abs() < 1.5
+        && (a.h - b.h).abs() < 1.5
+}
+
 /// Runtime state of the service.
 struct Service {
     engine: Engine,
     /// Origin of the managed monitor in virtual-desktop coordinates —
     /// the engine works in screen-local pixels, so we add this on.
     origin: (f32, f32),
-    /// Where each window was last asked to go, in virtual-desktop
-    /// pixels, so a repeat of the placement already in force can skip
-    /// the OS call entirely.
-    placed: HashMap<WinId, Rect>,
     /// Every window id the engine has been told about and not yet seen
     /// close — *including* ones it declined to manage. The engine keeps
     /// no record of a window it released, so without this the rescan
@@ -208,7 +214,6 @@ impl Service {
         Self {
             engine: Engine::new(cfg),
             origin: (0.0, 0.0),
-            placed: HashMap::new(),
             known: HashSet::new(),
             flights: Vec::new(),
             pending: None,
@@ -290,19 +295,21 @@ impl Service {
                 Command::Place { win, to, animate } => {
                     let hwnd = win::hwnd_of(win);
                     let target = Rect::new(to.x + self.origin.0, to.y + self.origin.1, to.w, to.h);
-                    // Re-issuing the placement already in force is a
-                    // no-op. `WM_DEVICECHANGE` fires for every USB
-                    // arrival and each one replays the whole layout,
-                    // which would otherwise re-snap all 13 windows.
-                    if self.placed.get(&win) == Some(&target)
-                        && !self.flights.iter().any(|f| f.id == win)
-                    {
-                        continue;
-                    }
-                    self.placed.insert(win, target);
-                    self.flights.retain(|f| f.id != win);
                     let from = win::window_rect(hwnd);
                     let compensated = frame::compensate_rect(hwnd, target);
+                    // Already there? Then there is nothing to do.
+                    // `WM_DEVICECHANGE` fires on every USB arrival and
+                    // replays the whole layout, which would otherwise
+                    // re-snap all 13 windows each time.
+                    //
+                    // This asks where the window *is*, not where it was
+                    // last sent. Those differ once the user drags one,
+                    // and comparing the live rect is what lets a
+                    // layout-wide re-assert put a dragged window back.
+                    if !self.flights.iter().any(|f| f.id == win) && nearly(from, compensated) {
+                        continue;
+                    }
+                    self.flights.retain(|f| f.id != win);
                     if animate {
                         self.flights.push(Flight {
                             id: win,
@@ -317,7 +324,6 @@ impl Service {
                     }
                 }
                 Command::Release(win) => {
-                    self.placed.remove(&win);
                     self.flights.retain(|f| f.id != win);
                 }
             }
@@ -343,7 +349,6 @@ impl Service {
         for id in gone {
             self.dispatch(Event::Closed(id));
             self.known.remove(&id);
-            self.placed.remove(&id);
         }
     }
 

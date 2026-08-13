@@ -66,6 +66,12 @@ If an edit doesn't parse, focal-desk keeps the configuration it is already
 running and writes the offending line to the log — it will not silently drop
 back to defaults and lose your `[app]` rules.
 
+Saving the file is also how you **re-assert the layout**. focal-desk does not
+continuously police window positions — drag a window off its slot and it stays
+there until something moves it. Re-saving the config (even unchanged) puts
+every window back where it belongs, and fixes any window whose first placement
+landed a few pixels out because its frame was still settling when it opened.
+
 One caveat: `gutter_in`, `focal_frac`, `band_frac` and `dwell_ms` take effect
 immediately, but a changed `home` or `focal_fit` applies to windows opened
 *after* the edit. Re-homing windows already on screen is exactly the
