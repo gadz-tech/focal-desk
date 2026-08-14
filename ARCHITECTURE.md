@@ -52,6 +52,8 @@ Three properties fall out of this:
 | change what happens to a 13th window           | one arm in `engine.rs::on_opened`         |
 | add a promotion gesture (hotkey, gaze, …)      | adapter only — it just sends `Promoted`   |
 | add wire behaviors (pulse on notification)     | new `Command` variant + renderer          |
+| leave an app alone entirely                    | `[ignore]` in config — no code            |
+| freeze the layout for a new kind of overlay    | adapter raises `Event::Suspend`           |
 | swap the whole layout (strip, twin-focal, …)   | `layout.rs::regions` — same slot ids      |
 | draw/remove soft wires                         | new `Event` variants, engine state        |
 
@@ -73,6 +75,20 @@ parallel sharing not — PCB rule) → share a lane when squeezed → report
 unroutable (renderer draws stubs). Wires leaving the same window edge fan out
 into distinct ports ordered by destination. Routing only recomputes when the
 layout changes, which is only on promotion — idle cost is zero.
+
+## Two invariants learned the hard way
+
+**Measure frame insets once.** `frame::measure` is only ever called on a
+restored, stationary window, and the adapter caches the result for the life of
+that window. Re-measuring one that is mid-flight, maximized, or freshly torn
+out of a browser tab reads bounds DWM has not settled; feeding that into the
+next placement compounds a few pixels per promotion until the frame is visibly
+wrong. Implausible measurements are discarded rather than trusted.
+
+**Freeze for overlays.** Anything matching the ignore list is never managed,
+and while one holds the foreground the engine issues no commands at all and
+in-flight animations are settled immediately. A screen capture must see a still
+screen.
 
 ## The Win32 layer (`focal-win`)
 

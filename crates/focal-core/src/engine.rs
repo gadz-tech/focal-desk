@@ -25,6 +25,11 @@ pub enum Event {
     ClearStage,
     /// Desk mode toggled: eGPU / 65" panel attached or removed.
     DeskMode(bool),
+    /// Freeze or unfreeze the layout. Raised while an ignored overlay
+    /// holds the foreground — a screen capture, the task switcher —
+    /// where any window motion would land in whatever the user is
+    /// capturing or choosing from.
+    Suspend(bool),
     /// The config file changed on disk and reparsed cleanly. Carries the
     /// whole new config; the adapter has already resolved `screen` from
     /// the live display, so the engine adopts this verbatim.
@@ -46,6 +51,7 @@ pub struct Engine {
     fits: HashMap<WinId, Option<Fit>>,
     occupants: HashMap<SlotId, WinId>,
     focused: Option<WinId>,
+    suspended: bool,
 }
 
 impl Engine {
@@ -58,6 +64,7 @@ impl Engine {
             fits: HashMap::new(),
             occupants: HashMap::new(),
             focused: None,
+            suspended: false,
         }
     }
 
@@ -69,6 +76,7 @@ impl Engine {
             Event::Promoted(id) => self.on_promoted(id),
             Event::Closed(id) => self.on_closed(id),
             Event::ClearStage => self.on_clear_stage(),
+            Event::Suspend(on) => self.set_suspended(on),
             Event::Reconfigured(cfg) => self.on_reconfigured(cfg),
         }
     }
@@ -81,6 +89,43 @@ impl Engine {
     pub fn home_of(&self, id: WinId) -> Option<SlotId> {
         self.homes.get(&id).copied()
     }
+    /// True while the layout is frozen for an overlay.
+    pub fn is_suspended(&self) -> bool {
+        self.suspended
+    }
+
+    /// Freeze or resume. Resuming re-asserts every window's position in
+    /// one pass, so anything that drifted while frozen — or opened
+    /// during a capture — is put right the moment the overlay closes.
+    fn set_suspended(&mut self, on: bool) -> Vec<Command> {
+        if on == self.suspended {
+            return Vec::new();
+        }
+        self.suspended = on;
+        if on || !self.active {
+            return Vec::new();
+        }
+        self.reassert()
+    }
+
+    /// A `Place` for every managed window at the position it should
+    /// currently hold.
+    fn reassert(&self) -> Vec<Command> {
+        let focused = self.focused;
+        let cfg = &self.cfg;
+        self.homes
+            .iter()
+            .map(|(&id, &slot)| {
+                let to = if Some(id) == focused {
+                    layout::focal_rect(cfg, self.fits.get(&id).copied().flatten())
+                } else {
+                    layout::window_rect(cfg, slot)
+                };
+                Command::Place { win: id, to, animate: false }
+            })
+            .collect()
+    }
+
     /// True in desk mode, i.e. the engine is issuing commands.
     pub fn is_active(&self) -> bool {
         self.active
@@ -161,6 +206,10 @@ impl Engine {
     /// slot if free, else the first free slot center-out. With no free
     /// slot the window stays unmanaged (floats).
     fn on_opened(&mut self, id: WinId, meta: WindowMeta) -> Vec<Command> {
+        // Capture overlays and shell surfaces are left entirely alone.
+        if self.cfg.is_ignored(&meta) {
+            return vec![Command::Release(id)];
+        }
         let rule = self.cfg.apps.iter().find(|r| r.matcher.matches(&meta));
         let fit = rule.and_then(|r| r.focal_fit);
         let preferred = rule.and_then(|r| r.home);
@@ -181,7 +230,7 @@ impl Engine {
         self.homes.insert(id, slot);
         self.fits.insert(id, fit);
         self.occupants.insert(slot, id);
-        if self.active {
+        if self.active && !self.suspended {
             vec![Command::Place {
                 win: id,
                 to: layout::window_rect(&self.cfg, slot),
@@ -195,7 +244,11 @@ impl Engine {
     /// Put a window on the focal stage (shrunk to its fit hint) and
     /// send the previously focused window back to its own home.
     fn on_promoted(&mut self, id: WinId) -> Vec<Command> {
-        if !self.active || !self.homes.contains_key(&id) || self.focused == Some(id) {
+        if !self.active
+            || self.suspended
+            || !self.homes.contains_key(&id)
+            || self.focused == Some(id)
+        {
             return Vec::new();
         }
         let mut cmds = Vec::new();
@@ -225,6 +278,9 @@ impl Engine {
     /// Triggered by a hotkey or by the desktop itself becoming
     /// foreground (decided: clicking the desk clears the stage).
     fn on_clear_stage(&mut self) -> Vec<Command> {
+        if self.suspended {
+            return Vec::new();
+        }
         let Some(id) = self.focused.take() else {
             return Vec::new();
         };
@@ -347,6 +403,39 @@ mod tests {
         assert_eq!(e.focused(), None);
         // Second clear is a no-op.
         assert!(e.handle(Event::ClearStage).is_empty());
+    }
+
+    #[test]
+    fn nothing_moves_while_suspended() {
+        let (mut e, _) = engine_with_terminal_rule();
+        e.handle(Event::DeskMode(true));
+        e.handle(Event::Opened(1, meta("a.exe")));
+        e.handle(Event::Opened(2, meta("b.exe")));
+
+        e.handle(Event::Suspend(true));
+        assert!(e.is_suspended());
+        // The snip is in progress: nothing may move, for any reason.
+        assert!(e.handle(Event::Promoted(2)).is_empty());
+        assert!(e.handle(Event::ClearStage).is_empty());
+        assert!(e.handle(Event::Opened(3, meta("c.exe"))).is_empty());
+        assert_eq!(e.focused(), None);
+
+        // Closing the overlay puts everything back where it belongs.
+        let cmds = e.handle(Event::Suspend(false));
+        assert_eq!(cmds.len(), 3, "every managed window is re-asserted");
+        assert!(cmds.iter().all(|c| matches!(
+            c, Command::Place { animate: false, .. })), "no animation on resume");
+    }
+
+    #[test]
+    fn ignored_windows_are_never_adopted() {
+        let (mut e, _) = engine_with_terminal_rule();
+        e.handle(Event::DeskMode(true));
+        let cmds = e.handle(Event::Opened(9, meta("SnippingTool.exe")));
+        assert_eq!(cmds, vec![Command::Release(9)]);
+        assert_eq!(e.home_of(9), None);
+        // and it can never take the stage
+        assert!(e.handle(Event::Promoted(9)).is_empty());
     }
 
     #[test]

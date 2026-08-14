@@ -25,8 +25,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE, GWL_STYLE,
-    GW_OWNER, WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_THICKFRAME,
+    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, ShowWindow,
+    GWL_EXSTYLE, GWL_STYLE, GW_OWNER, SW_RESTORE, WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_THICKFRAME,
 };
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -92,6 +93,26 @@ pub fn already_running() -> bool {
             Err(err) => err.code() == ERROR_ACCESS_DENIED.to_hresult(),
         }
     }
+}
+
+/// True when the window is maximized. A maximized window must never be
+/// placed: Windows keeps drawing it as maximized (its frame is sized for
+/// a screen edge it no longer touches), which is what left a torn-out
+/// Edge tab permanently mis-framed. Restore it first.
+pub fn is_maximized(hwnd: HWND) -> bool {
+    unsafe { IsZoomed(hwnd).as_bool() }
+}
+
+/// Take a window out of its maximized or snapped state so its geometry
+/// becomes ours to set. Returns true if it actually changed anything.
+pub fn restore_window(hwnd: HWND) -> bool {
+    if !is_maximized(hwnd) {
+        return false;
+    }
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_RESTORE);
+    }
+    true
 }
 
 /// Convert a `HWND` into the engine's opaque window id.

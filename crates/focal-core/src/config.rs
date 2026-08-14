@@ -142,6 +142,11 @@ pub struct Config {
     pub force_active: bool,
     pub apps: Vec<AppRule>,
     pub wires: Vec<WireRule>,
+    /// Windows that focal-desk must not touch. While one of these holds
+    /// the foreground the whole layout freezes, because these are the
+    /// overlays you are *doing something with* — screen capture, the
+    /// task switcher — and a window sliding underneath ruins the shot.
+    pub ignore: Vec<Matcher>,
 }
 
 impl Default for Config {
@@ -158,11 +163,39 @@ impl Default for Config {
             force_active: false,
             apps: Vec::new(),
             wires: Vec::new(),
+            ignore: default_ignores(),
         }
     }
 }
 
+/// Shell surfaces and capture overlays that are never managed, and that
+/// freeze the layout while they are in front. Snipping Tool is the one
+/// that matters day to day: it goes fullscreen and transparent over
+/// everything, and any window motion underneath lands in the capture.
+pub fn default_ignores() -> Vec<Matcher> {
+    [
+        "*snippingtool*",
+        "*screenclippinghost*",
+        "*screensketch*",
+        "*textinputhost*",
+        "*searchhost*",
+        "*startmenuexperiencehost*",
+        "*shellexperiencehost*",
+        "*peopleexperiencehost*",
+        "*lockapp*",
+        "*magnify*",
+    ]
+    .into_iter()
+    .map(|g| Matcher::Process(g.to_string()))
+    .collect()
+}
+
 impl Config {
+    /// True when this window must be left alone entirely.
+    pub fn is_ignored(&self, meta: &WindowMeta) -> bool {
+        self.ignore.iter().any(|m| m.matches(meta))
+    }
+
     /// The structural gutter converted to pixels on the configured screen.
     pub fn gutter_px(&self) -> f32 {
         self.gutter_in * self.screen.px_per_inch()
@@ -193,6 +226,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
         Root,
         App(AppRule),
         Wire(Option<Matcher>, Option<Matcher>),
+        Ignore,
     }
 
     /// Finish the section in progress, pushing it onto the config.
@@ -200,6 +234,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
         match sec {
             Sec::Root => {}
             Sec::App(rule) => cfg.apps.push(rule),
+            Sec::Ignore => {}
             Sec::Wire(a, b) => {
                 let (a, b) = (
                     a.ok_or("[wire] needs a_process or a_title")?,
@@ -229,6 +264,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
             sec = match line {
                 "[app]" => Sec::App(AppRule { matcher: Matcher::Any, home: None, focal_fit: None }),
                 "[wire]" => Sec::Wire(None, None),
+                "[ignore]" => Sec::Ignore,
                 other => return Err(where_(format!("unknown section {other}"))),
             };
             continue;
@@ -263,6 +299,8 @@ pub fn parse(text: &str) -> Result<Config, String> {
                     h: num(k, h).map_err(where_)?,
                 });
             }
+            (Sec::Ignore, "process") => cfg.ignore.push(Matcher::Process(v.into())),
+            (Sec::Ignore, "title") => cfg.ignore.push(Matcher::Title(v.into())),
             (Sec::Wire(a, _), "a_process") => *a = Some(Matcher::Process(v.into())),
             (Sec::Wire(a, _), "a_title") => *a = Some(Matcher::Title(v.into())),
             (Sec::Wire(_, b), "b_process") => *b = Some(Matcher::Process(v.into())),
@@ -302,6 +340,12 @@ home      = left-top
 [app]
 title     = *Claude*
 home      = right-top
+
+# Never manage these, and hold the whole layout still while one of them
+# is in front. Snipping Tool, the task switcher and the start menu are
+# already covered by the built-in list; entries here are added to it.
+# [ignore]
+# process = *obs64*
 "#;
 
 #[cfg(test)]
@@ -337,6 +381,33 @@ mod tests {
         assert!(err.starts_with("line 2:"), "got {err}");
         let err = parse("[app]\nhome = nowhere").unwrap_err();
         assert!(err.contains("unknown slot"), "got {err}");
+    }
+
+    #[test]
+    fn snipping_tool_is_ignored_out_of_the_box() {
+        let cfg = Config::default();
+        assert!(cfg.is_ignored(&WindowMeta {
+            process: "SnippingTool.exe".into(),
+            title: "Snipping Tool".into(),
+        }));
+        assert!(!cfg.is_ignored(&WindowMeta {
+            process: "Code.exe".into(),
+            title: "editor".into(),
+        }));
+    }
+
+    #[test]
+    fn ignore_section_adds_to_the_defaults() {
+        let cfg = parse("[ignore]\nprocess = *obs64*").unwrap();
+        assert!(cfg.is_ignored(&WindowMeta {
+            process: "obs64.exe".into(),
+            title: String::new(),
+        }));
+        // built-ins survive
+        assert!(cfg.is_ignored(&WindowMeta {
+            process: "SnippingTool.exe".into(),
+            title: String::new(),
+        }));
     }
 
     #[test]

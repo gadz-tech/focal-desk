@@ -13,7 +13,7 @@
 //! Everything policy-shaped lives in `focal-core`; this file only knows
 //! *how* to ask Windows, never *what* to do.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::OnceLock;
@@ -182,6 +182,12 @@ struct Service {
     /// no record of a window it released, so without this the rescan
     /// would re-announce every unmanaged window on every pass.
     known: HashSet<WinId>,
+    /// Frame insets per window, measured once when the window is first
+    /// placed and never again. Re-measuring a window that is mid-flight
+    /// or maximized reads bounds DWM has not settled, and feeding that
+    /// back compounds a few pixels every promotion until the frame is
+    /// visibly wrong.
+    insets: HashMap<WinId, frame::Insets>,
     flights: Vec<Flight>,
     /// Window that currently holds the foreground, and since when.
     pending: Option<(u64, Instant)>,
@@ -215,6 +221,7 @@ impl Service {
             engine: Engine::new(cfg),
             origin: (0.0, 0.0),
             known: HashSet::new(),
+            insets: HashMap::new(),
             flights: Vec::new(),
             pending: None,
             promoted_pending: false,
@@ -295,8 +302,20 @@ impl Service {
                 Command::Place { win, to, animate } => {
                     let hwnd = win::hwnd_of(win);
                     let target = Rect::new(to.x + self.origin.0, to.y + self.origin.1, to.w, to.h);
+                    // A maximized window keeps drawing its frame for the
+                    // screen edge it thinks it is against, so restore it
+                    // before we own its geometry — and re-measure, since
+                    // the numbers we could have taken while it was
+                    // maximized were meaningless.
+                    if win::restore_window(hwnd) {
+                        self.insets.remove(&win);
+                    }
+                    let insets = *self
+                        .insets
+                        .entry(win)
+                        .or_insert_with(|| frame::measure(hwnd));
                     let from = win::window_rect(hwnd);
-                    let compensated = frame::compensate_rect(hwnd, target);
+                    let compensated = frame::compensate(target, insets);
                     // Already there? Then there is nothing to do.
                     // `WM_DEVICECHANGE` fires on every USB arrival and
                     // replays the whole layout, which would otherwise
@@ -325,6 +344,7 @@ impl Service {
                 }
                 Command::Release(win) => {
                     self.flights.retain(|f| f.id != win);
+                    self.insets.remove(&win);
                 }
             }
         }
@@ -349,6 +369,7 @@ impl Service {
         for id in gone {
             self.dispatch(Event::Closed(id));
             self.known.remove(&id);
+            self.insets.remove(&id);
         }
     }
 
@@ -361,10 +382,38 @@ impl Service {
             .count()
     }
 
-    /// Handle a foreground change: the desktop clears the stage, any
-    /// other window starts (or restarts) the dwell timer.
+    /// Finish every flight instantly, leaving each window at its final
+    /// rectangle. Used when an overlay appears: a capture must see a
+    /// still screen, not one mid-animation.
+    fn settle_flights(&mut self) {
+        for flight in std::mem::take(&mut self.flights) {
+            anim::place_now(flight.hwnd, flight.to);
+        }
+    }
+
+    /// Handle a foreground change: an ignored overlay freezes the
+    /// layout, the desktop clears the stage, anything else starts (or
+    /// restarts) the dwell timer.
     fn on_foreground(&mut self, id: u64) {
         let hwnd = win::hwnd_of(id);
+        // Screen capture is the case that matters: Snipping Tool covers
+        // the screen and any window that slides underneath lands in the
+        // shot. Freeze first, and stop mid-flight windows where they
+        // are rather than letting them keep moving.
+        if self.engine.config().is_ignored(&win::window_meta(hwnd)) {
+            self.pending = None;
+            self.promoted_pending = false;
+            if !self.engine.is_suspended() {
+                self.settle_flights();
+                self.dispatch(Event::Suspend(true));
+                log::line("suspended for overlay");
+            }
+            return;
+        }
+        if self.engine.is_suspended() {
+            self.dispatch(Event::Suspend(false));
+            log::line("resumed");
+        }
         if win::is_desktop(hwnd) {
             self.pending = None;
             self.promoted_pending = false;

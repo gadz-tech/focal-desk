@@ -95,6 +95,22 @@ Slots: `focal`, `left-top`, `left-bottom`, `right-top`, `right-bottom`,
 `top-1`, `top-2`, `bottom-1`, `bottom-2`, `corner-tl`, `corner-tr`,
 `corner-bl`, `corner-br`.
 
+## Overlays and screen capture
+
+Screen capture is the one thing a moving layout ruins. While Snipping Tool
+(or the task switcher, start menu, search) holds the foreground, focal-desk
+**freezes**: nothing is promoted, nothing is placed, and any window mid-flight
+stops where it is. When the overlay closes, every window is re-asserted in one
+pass, so anything that drifted is put right.
+
+The built-in ignore list covers the Windows shell surfaces. Add your own —
+they're appended to the defaults:
+
+```
+[ignore]
+process = *obs64*
+```
+
 ## Known rough edges (v0.1)
 
 - **Elevated windows won't move** unless focal-desk also runs elevated. The
@@ -102,6 +118,10 @@ Slots: `focal`, `left-top`, `left-bottom`, `right-top`, `right-bottom`,
 - **`focal-desk.conf`, the log and the executable all live in `target\release\`,
   so `cargo clean` deletes your tuning** and breaks the scheduled task's path.
   Keep a copy of the conf once you've dialled it in.
+- **Maximized windows are restored before being placed.** A maximized window
+  keeps drawing its frame for the screen edge it thinks it is against, so
+  focal-desk restores it first. You may see a window un-maximize as it is
+  adopted; that is deliberate.
 - **Apps with minimum sizes** (some installers, Slack's mini player) may refuse
   their slot rect and sit oversized. They are still usable; the layout just
   isn't exact for them.
