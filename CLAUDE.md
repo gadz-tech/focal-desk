@@ -133,7 +133,65 @@ worktrees (`.claude/worktrees/*`) are exempt — they are disposable by construc
 
 - `C:\Dev\olga` is Olga's. Sessions never read or catalog its contents. When her
   private repo exists, seed its `CLAUDE.md` with this shared block.
-- `ryangadz.github.io` is **PUBLIC**. Nothing personal, family-internal, or
-  machine-specific lands there — and its `CLAUDE.md` deliberately does NOT carry
-  this block (marked `SHARED-RULES:EXEMPT`).
+- **Public repos never carry this block.** Nothing personal, family-internal, or
+  machine-specific lands in one — and this block is all three, so a public repo's
+  `CLAUDE.md` is deliberately marked `SHARED-RULES:EXEMPT` instead of stamped.
+  Currently public: `ryangadz.github.io` and `vector-studio-llm` (the second
+  found unmarked 2026-09-01 — it had no markers at all, so the next sync would
+  have stamped Olga's folder, Lily's tablet and the N100 into a public repo).
+  **Making a repo public means marking its `CLAUDE.md` EXEMPT in the same
+  session.**
+
+## Everything lives under `C:\Dev` — never the user profile (Olga, 2026-08-30)
+
+It applies to **paths sessions recommend**, not just files they write. Olga,
+2026-08-30, after a runbook step told her to clone to `%USERPROFILE%\Dev\household`:
+the users directory on this computer is never used for Claude sessions.
+
+- **No session ever writes to, clones into, or recommends a path under
+  `C:\Users\...`** — not `%USERPROFILE%`, not AppData, not Documents or
+  Downloads. Every repo, lane, clone and deliverable lives under `C:\Dev`.
+- A per-person lane gets its own `C:\Dev` folder (lanes are full clones):
+  Olga's household lane is **`C:\Dev\household-olga`**, alongside Ryan's
+  `C:\Dev\household`.
+- Writing `%USERPROFILE%` into a runbook, worker prompt or paste block is the
+  same defect as writing the file there. Check plans for it before handing
+  them over.
+
+### File delivery: connected folders, never the session scratchpad (Ryan, repeatedly; finally filed 2026-08-24)
+
+The narrower case of the same rule. Ryan has told sessions repeatedly not to
+deliver files into the Cowork outputs/scratchpad under
+`C:\Users\ryang\AppData\...` — he can't find them there, and on 2026-08-24 it
+cost him his own resume mid-application.
+
+- **Anything Ryan will open, keep, or submit lands in a connected `C:\Dev`
+  folder** (the right repo for the content — personal → `ryan/inbox` if
+  unsure), THEN gets presented. The scratchpad is for intermediate work
+  only.
+- Presenting a file straight from the scratchpad is a defect even though
+  the tool allows it.
+
+## Ryan creates repos; sessions push into them (added 2026-09-01)
+
+Sessions do not run `gh repo create` — Ryan makes the repo, a session clones and
+populates it. The governing rule is about *sensitivity, not complexity*:
+**anything whose failure mode is exposure gets initiated by Ryan personally**,
+however simple the step looks. Repo creation for family or personal material is
+the canonical case — the account/org a repo lands in is the whole security
+boundary, and GitHub base permissions are a *floor*, so a repo created in an org
+with read-for-all members is exposed the moment it exists. A session that thinks
+it needs a new repo asks for one.
+
+## A cross-repo rule lands HERE in the session that writes it (added 2026-09-01)
+
+Three rules accumulated a "this belongs in `SHARED-RULES.md`; a Code session
+ports it" note and none got ported — a **loose end in prose**, the exact failure
+class the session-communication rules ban. The root cause is narrower than
+"sessions forget": a Cowork session usually has one or two repos mounted and
+**cannot reach `C:\Dev\SHARED-RULES.md` at all**, so it has nowhere to put the
+rule but the local file. Apply the three-places rule instead: a session that
+writes a cross-repo rule it cannot port itself **files a `box/WORKER-PROMPTS-<date>.md`
+entry for the port in the same session** — a tracked file naming who acts next —
+never a prose IOU inside a `CLAUDE.md`.
 <!-- SHARED-RULES:END -->
