@@ -107,8 +107,12 @@ fn main() {
                 },
             ),
         ),
-        ("terminal holds foreground past dwell", Event::Promoted(0x7E)),
-        ("editor holds foreground past dwell", Event::Promoted(0xE1)),
+        ("terminal holds foreground past dwell", Event::Dwelled(0x7E)),
+        ("editor's tab is tapped", Event::Promoted(0xE1)),
+        (
+            "terminal's tab is dragged onto corner-tl",
+            Event::MoveTo(0x7E, layout::slot_from_name("corner-tl").unwrap()),
+        ),
         ("click the desktop", Event::ClearStage),
         ("undock", Event::DeskMode(false)),
     ];

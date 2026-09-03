@@ -48,6 +48,30 @@ impl Default for Fit {
     }
 }
 
+/// The shape of the tap target beside every managed window (Ryan,
+/// 2026-08-28: "a border around each window … all the way around, or
+/// maybe a tab that is always facing the center of the screen"). Both
+/// are drawn by the adapter from `tab.rs` geometry; which one is a
+/// matter of feel, so it is config, not code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TapStyle {
+    /// One tab on the edge that faces the screen center.
+    Tab,
+    /// A ring around the whole window, `tab_in` wide.
+    Border,
+}
+
+impl TapStyle {
+    /// Parse the config spelling: `tab` or `border`, case-insensitive.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_lowercase().as_str() {
+            "tab" => Some(TapStyle::Tab),
+            "border" => Some(TapStyle::Border),
+            _ => None,
+        }
+    }
+}
+
 /// What the adapter reports about a window when it appears.
 #[derive(Clone, Debug)]
 pub struct WindowMeta {
@@ -132,8 +156,24 @@ pub struct Config {
     pub focal_frac: f32,
     /// Height of the top and bottom bands as a fraction of the screen.
     pub band_frac: f32,
-    /// How long a window must hold the foreground before promotion.
+    /// How long a window must hold the foreground before promotion, in
+    /// milliseconds. **`0` turns dwell off**: then only an explicit
+    /// gesture promotes — a tap on the window's tab, a hotkey — and a
+    /// plain click into a window body never moves anything (Ryan,
+    /// 2026-08-28: the 1.35 s delay). Non-zero keeps dwell as the
+    /// fallback alongside the tab; whether it stays at all is an open
+    /// decision for Ryan's first live run with the tabs.
     pub dwell_ms: u64,
+    /// Tab on the center-facing edge, or a border all the way around.
+    pub tap_style: TapStyle,
+    /// Depth of the tab (or width of the border), in inches — a physical
+    /// quantity like the gutter, so it survives a resolution change. It
+    /// is clamped to half the gutter at layout time: a tap target never
+    /// leaves its own window's side of the channel, so targets never
+    /// overlap each other or any window.
+    pub tab_in: f32,
+    /// Length of the tab along its edge, in inches (clamped to the edge).
+    pub tab_length_in: f32,
     /// Physical diagonal of the desk panel, used to convert the
     /// inch-based gutter into pixels once the mode is known.
     pub screen_diagonal_in: f32,
@@ -151,7 +191,8 @@ pub struct Config {
 
 impl Default for Config {
     /// The setup this project is built around: 65" 8K, 1.5" gutter,
-    /// 56% focal column, 22% bands, 1.2s dwell.
+    /// 56% focal column, 22% bands, 1.2s dwell (kept on by default until
+    /// the tab has been proven live), a 0.75" × 5" tab.
     fn default() -> Self {
         Self {
             screen: Screen::desk_65_8k(),
@@ -159,6 +200,9 @@ impl Default for Config {
             focal_frac: 0.56,
             band_frac: 0.22,
             dwell_ms: 1200,
+            tap_style: TapStyle::Tab,
+            tab_in: 0.75,
+            tab_length_in: 5.0,
             screen_diagonal_in: 65.0,
             force_active: false,
             apps: Vec::new(),
@@ -200,8 +244,25 @@ impl Config {
     pub fn gutter_px(&self) -> f32 {
         self.gutter_in * self.screen.px_per_inch()
     }
-}
 
+    /// True when holding the foreground still promotes (`dwell_ms > 0`).
+    /// Zero is tab-only mode: the adapter never starts the timer, and
+    /// the engine ignores a `Dwelled` event should one arrive anyway.
+    pub fn dwell_enabled(&self) -> bool {
+        self.dwell_ms > 0
+    }
+
+    /// Tab depth (border width) in pixels, clamped to half the gutter so
+    /// the target stays inside its own window's half of the channel.
+    pub fn tab_px(&self) -> f32 {
+        (self.tab_in * self.screen.px_per_inch()).min(self.gutter_px() / 2.0)
+    }
+
+    /// Tab length in pixels (before clamping to the edge it sits on).
+    pub fn tab_length_px(&self) -> f32 {
+        self.tab_length_in * self.screen.px_per_inch()
+    }
+}
 
 /// Parse the config text format: `key = value` lines, with `[app]` and
 /// `[wire]` sections repeated as needed. `#` starts a comment. Unknown
@@ -278,6 +339,12 @@ pub fn parse(text: &str) -> Result<Config, String> {
             (Sec::Root, "focal_frac") => cfg.focal_frac = num(k, v).map_err(where_)?,
             (Sec::Root, "band_frac") => cfg.band_frac = num(k, v).map_err(where_)?,
             (Sec::Root, "dwell_ms") => cfg.dwell_ms = num(k, v).map_err(where_)?,
+            (Sec::Root, "tap_style") => {
+                cfg.tap_style = TapStyle::from_name(v)
+                    .ok_or_else(|| where_(format!("tap_style wants tab or border, got {v:?}")))?
+            }
+            (Sec::Root, "tab_in") => cfg.tab_in = num(k, v).map_err(where_)?,
+            (Sec::Root, "tab_length_in") => cfg.tab_length_in = num(k, v).map_err(where_)?,
             (Sec::Root, "screen_diagonal_in") => {
                 cfg.screen_diagonal_in = num(k, v).map_err(where_)?
             }
@@ -320,7 +387,13 @@ pub const EXAMPLE: &str = r#"# focal-desk configuration.
 gutter_in          = 1.5    # structural gap; actively resizes windows
 focal_frac         = 0.56   # width of the focal column (fraction of screen)
 band_frac          = 0.22   # height of the top/bottom bands
-dwell_ms           = 1200   # how long a window must hold focus to be promoted
+dwell_ms           = 1200   # how long a window must hold focus to be promoted;
+                            # 0 = off: only a tap on a window's tab promotes,
+                            # a click into a window body never does
+tap_style          = tab    # tab = one tab facing screen center; border = all
+                            # the way around. Tap it to promote, drag it to move.
+tab_in             = 0.75   # tab depth / border width, inches (max: half the gutter)
+tab_length_in      = 5      # tab length along its edge, inches
 screen_diagonal_in = 65     # physical size of the desk panel
 force_active       = false  # true = manage windows even without the desk display
 
@@ -429,5 +502,39 @@ mod tests {
         let cfg = Config::default();
         // 1.5in on a 56.65in / 7680px panel is ~203px.
         assert!((cfg.gutter_px() - 203.35).abs() < 1.0);
+    }
+
+    #[test]
+    fn dwell_zero_means_off() {
+        let mut cfg = Config::default();
+        assert!(cfg.dwell_enabled(), "the shipped default keeps dwell as the fallback");
+        cfg.dwell_ms = 0;
+        assert!(!cfg.dwell_enabled());
+        let parsed = parse("dwell_ms = 0").unwrap();
+        assert!(!parsed.dwell_enabled());
+    }
+
+    #[test]
+    fn tap_target_keys_parse_and_reject_typos() {
+        let cfg = parse("tap_style = border\ntab_in = 1\ntab_length_in = 3.5").unwrap();
+        assert_eq!(cfg.tap_style, TapStyle::Border);
+        assert!((cfg.tab_in - 1.0).abs() < 1e-6);
+        assert!((cfg.tab_length_in - 3.5).abs() < 1e-6);
+        assert_eq!(parse("tap_style = TAB").unwrap().tap_style, TapStyle::Tab);
+        let err = parse("tap_style = ring").unwrap_err();
+        assert!(err.contains("tab or border"), "got {err}");
+        // The example config spells out every knob, so it must carry them.
+        assert_eq!(parse(EXAMPLE).unwrap().tap_style, TapStyle::Tab);
+    }
+
+    #[test]
+    fn tab_depth_never_exceeds_half_the_gutter() {
+        let mut cfg = Config::default();
+        // 0.75in of a 1.5in gutter is exactly the half — allowed.
+        assert!((cfg.tab_px() - cfg.gutter_px() / 2.0).abs() < 0.5);
+        cfg.tab_in = 2.0;
+        assert!((cfg.tab_px() - cfg.gutter_px() / 2.0).abs() < 1e-3, "clamped");
+        cfg.tab_in = 0.25;
+        assert!((cfg.tab_px() - 0.25 * cfg.screen.px_per_inch()).abs() < 1e-3);
     }
 }

@@ -124,6 +124,20 @@ pub fn focal_rect(cfg: &Config, fit: Option<Fit>) -> Rect {
     stage.centered_sub(stage.w * f.w, stage.h * f.h)
 }
 
+/// The slot whose region contains a screen-local point, gutters
+/// included: the regions tile the screen, so a drop anywhere on it has
+/// a target. `None` only off-screen. This is how the adapter turns the
+/// release point of a tab drag into `Event::MoveTo` (2026-09-03).
+pub fn slot_at(cfg: &Config, x: f32, y: f32) -> Option<SlotId> {
+    let (w, h) = (cfg.screen.px_w as f32, cfg.screen.px_h as f32);
+    regions(cfg)
+        .iter()
+        .position(|r| {
+            Rect::new(r.frac.x * w, r.frac.y * h, r.frac.w * w, r.frac.h * h).contains(x, y)
+        })
+        .map(|i| SlotId(i as u8))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +182,23 @@ mod tests {
         assert!((r.h - stage.h).abs() < 0.5);
         let (sc, rc) = (stage.center(), r.center());
         assert!((sc.0 - rc.0).abs() < 0.5 && (sc.1 - rc.1).abs() < 0.5);
+    }
+
+    #[test]
+    fn slot_at_names_the_region_under_a_point() {
+        let cfg = Config::default();
+        for i in 0..SLOT_COUNT as u8 {
+            let s = SlotId(i);
+            let (cx, cy) = window_rect(&cfg, s).center();
+            assert_eq!(slot_at(&cfg, cx, cy), Some(s), "center of {}", slot_name(s));
+        }
+        // The gutter belongs to the region it lies in: a point just left
+        // of the focal window is still a drop on the focal slot.
+        let focal = window_rect(&cfg, FOCAL);
+        assert_eq!(slot_at(&cfg, focal.x - 1.0, focal.center().1), Some(FOCAL));
+        // The very corner of the screen, and off it.
+        assert_eq!(slot_at(&cfg, 0.0, 0.0), slot_from_name("corner-tl"));
+        assert_eq!(slot_at(&cfg, -1.0, 10.0), None);
+        assert_eq!(slot_at(&cfg, cfg.screen.px_w as f32 + 1.0, 10.0), None);
     }
 }
