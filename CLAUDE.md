@@ -8,8 +8,11 @@ Conventions for anyone (human or Claude) working this repo:
   to it only through `engine::Event` in and `engine::Command` out.
 - **Features enter as Event/Command variants or config**, never as functions
   bolted onto platform code. See ARCHITECTURE.md ("Where a feature goes").
-- **`index.html` is the playable spec.** Behavioral changes should land in both
-  the mock and the engine, and engine invariants get pinned by tests.
+- **`index.html` is retired (Ryan, 2026-09-03).** Two generations behind the
+  engine and nothing real could be tested with it — it only ever showed windows
+  moving. Don't touch it, don't port behavior into it. **The focal-core tests
+  are the spec:** a behavioral change lands in the engine with the test that
+  pins it. (Mock-first was by design in 2026-08; today's word wins.)
 - **Run `cargo test --workspace` before pushing.** CI runs Linux and Windows.
 - Decided: clicking the desktop (shell window foreground past dwell) maps to
   `Event::ClearStage`. Clicking the focused window is a no-op (test-pinned).

@@ -56,6 +56,7 @@ Three properties fall out of this:
 | freeze the layout for a new kind of overlay    | adapter raises `Event::Suspend`           |
 | swap the whole layout (strip, twin-focal, …)   | `layout.rs::regions` — same slot ids      |
 | draw/remove soft wires                         | new `Event` variants, engine state        |
+| move a window by hand (2026-09-03: drag its tab) | adapter sends `Event::MoveTo(win, slot)`; `layout::slot_at` names the slot under the pointer; the tab itself is `tab.rs` geometry in core + `focal-win/tab.rs` windows |
 
 ## Layout: the structural gutter
 
