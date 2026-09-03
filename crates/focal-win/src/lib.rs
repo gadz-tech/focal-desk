@@ -12,6 +12,7 @@
 //! - [`win`]     — small safe wrappers over the raw Win32 calls
 //! - [`log`]     — the log file, since the service has no console
 //! - [`tray`]    — the notification-area icon and its menu
+//! - [`tab`]     — the tap targets: tap to promote, drag to move (2026-09-03)
 //! - [`adapter`] — the service loop that ties it together
 
 #[cfg(windows)]
@@ -26,6 +27,8 @@ pub mod frame;
 pub mod hook;
 #[cfg(windows)]
 pub mod log;
+#[cfg(windows)]
+pub mod tab;
 #[cfg(windows)]
 pub mod tray;
 #[cfg(windows)]

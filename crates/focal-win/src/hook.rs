@@ -1,9 +1,11 @@
-//! The foreground hook — the entire input side of the product.
+//! The foreground hook — the input side of the product, together with
+//! the tabs in `tab.rs` (2026-09-03).
 //!
 //! `SetWinEventHook(EVENT_SYSTEM_FOREGROUND, ..)` fires whenever any
 //! window becomes the foreground window: click, alt-tab, taskbar, app
-//! launch. That is why focal-desk needs no gesture of its own —
-//! activation *is* the gesture.
+//! launch. Activation was the only gesture until the tabs; it still
+//! drives the dwell timer while `dwell_ms` is on, and the desktop click
+//! that clears the stage.
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};

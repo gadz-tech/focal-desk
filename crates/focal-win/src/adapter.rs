@@ -3,12 +3,15 @@
 //!
 //! Shape of a tick (~120 Hz):
 //!
-//! 1. pump the message queue (this is also how WinEvent hooks arrive);
-//! 2. fold queued notifications — foreground changes, hotkeys, display
-//!    changes — into engine events;
+//! 1. pump the message queue (this is also how WinEvent hooks and the
+//!    tabs' mouse messages arrive);
+//! 2. fold queued notifications — foreground changes, tab taps and
+//!    drags, hotkeys, display changes — into engine events;
 //! 3. rescan the window list a couple of times a second for opens/closes;
-//! 4. promote whatever has held the foreground for `dwell_ms`;
-//! 5. advance in-flight animations.
+//! 4. promote whatever has held the foreground for `dwell_ms` (if dwell
+//!    is on at all — `dwell_ms = 0` leaves the tabs as the only way);
+//! 5. advance in-flight animations;
+//! 6. put a tap target beside every managed window if anything changed.
 //!
 //! Everything policy-shaped lives in `focal-core`; this file only knows
 //! *how* to ask Windows, never *what* to do.
@@ -22,6 +25,8 @@ use std::time::{Duration, Instant, SystemTime};
 use focal_core::config::{self, Config, Screen};
 use focal_core::engine::{Command, Engine, Event, WinId};
 use focal_core::geometry::Rect;
+use focal_core::layout::{self, SlotId};
+use focal_core::tab::TapTarget;
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -39,6 +44,7 @@ use crate::anim::{self, Flight};
 use crate::dock;
 use crate::frame;
 use crate::log;
+use crate::tab;
 use crate::tray;
 use crate::win;
 
@@ -53,6 +59,15 @@ pub enum Note {
     Hotkey(i32),
     /// The user picked something from the tray menu.
     Menu(u32),
+    /// A window's tab was tapped: promote it.
+    Tap(u64),
+    /// A window's tab is being dragged and the pointer is here, in
+    /// virtual-desktop pixels: show the slot it would land in. Repeats
+    /// every tick while the drag lasts.
+    Drag(u64, i32, i32),
+    /// A dragged tab was released here: move the window to the slot
+    /// under the pointer.
+    Drop(u64, i32, i32),
 }
 
 /// Hotkey id: clear the focal stage (Ctrl+Alt+Space).
@@ -205,6 +220,14 @@ struct Service {
     /// The tooltip currently showing, so we only talk to the shell when
     /// the text actually changes.
     tip: String,
+    /// The tap targets beside every managed window.
+    tabs: tab::Tabs,
+    /// Set by anything that may have changed where a window belongs or
+    /// whether targets should show; the end of the tick re-syncs them.
+    tabs_dirty: bool,
+    /// The slot the drop highlight currently marks, so a drag that
+    /// stays in one slot does not re-place the ghost every tick.
+    ghost_slot: Option<SlotId>,
 }
 
 impl Service {
@@ -230,6 +253,9 @@ impl Service {
             config_seen,
             hwnd,
             tip: String::new(),
+            tabs: tab::Tabs::new(),
+            tabs_dirty: true,
+            ghost_slot: None,
         }
     }
 
@@ -287,10 +313,77 @@ impl Service {
     }
 
     /// Feed an event to the engine and start flights for the commands
-    /// that come back.
+    /// that come back. Any event may have moved a home, the focus, or
+    /// the frozen/active state, so the targets re-sync at the end of
+    /// the tick.
     fn dispatch(&mut self, event: Event) {
         let commands = self.engine.handle(event);
         self.apply(commands);
+        self.tabs_dirty = true;
+    }
+
+    /// Put a tap target beside every managed window, at the place the
+    /// engine intends for it (its home, or the stage at its fit), and
+    /// hide them all while the layout is frozen or inactive.
+    fn sync_tabs(&mut self) {
+        let cfg = self.engine.config();
+        let (ox, oy) = self.origin;
+        let targets: Vec<(WinId, TapTarget)> = self
+            .engine
+            .managed()
+            .into_iter()
+            .filter_map(|id| {
+                self.engine
+                    .placement(id)
+                    .map(|rect| (id, focal_core::tab::tap_target(cfg, rect).offset(ox, oy)))
+            })
+            .collect();
+        let visible = self.engine.is_active() && !self.engine.is_suspended();
+        self.tabs.sync(&targets, visible);
+        self.tabs_dirty = false;
+    }
+
+    /// The slot under a virtual-desktop point, if it is on the managed
+    /// monitor at all.
+    fn slot_under(&self, x: i32, y: i32) -> Option<SlotId> {
+        layout::slot_at(
+            self.engine.config(),
+            x as f32 - self.origin.0,
+            y as f32 - self.origin.1,
+        )
+    }
+
+    /// A tab is being dragged: light up the slot it would drop into.
+    /// Only talks to the ghost when the slot under the pointer changes.
+    fn on_drag(&mut self, _id: u64, x: i32, y: i32) {
+        let slot = self.slot_under(x, y);
+        if slot == self.ghost_slot {
+            return;
+        }
+        self.ghost_slot = slot;
+        match slot {
+            Some(slot) => {
+                let rect = layout::window_rect(self.engine.config(), slot);
+                self.tabs.show_ghost(Rect::new(
+                    rect.x + self.origin.0,
+                    rect.y + self.origin.1,
+                    rect.w,
+                    rect.h,
+                ));
+            }
+            None => self.tabs.hide_ghost(),
+        }
+    }
+
+    /// A dragged tab was released: move its window to the slot under
+    /// the pointer. Off the monitor, nothing happens.
+    fn on_drop(&mut self, id: u64, x: i32, y: i32) {
+        self.tabs.hide_ghost();
+        self.ghost_slot = None;
+        if let Some(slot) = self.slot_under(x, y) {
+            log::line(&format!("tab drop {id:#x} -> {}", layout::slot_name(slot)));
+            self.dispatch(Event::MoveTo(id, slot));
+        }
     }
 
     /// Execute engine commands: translate to virtual-desktop pixels,
@@ -423,16 +516,26 @@ impl Service {
         if self.engine.focused() == Some(id) {
             return;
         }
+        // With dwell off, being in a window is not a request to move it:
+        // the timer never starts, and only a tab tap promotes.
+        if !self.engine.config().dwell_enabled() {
+            return;
+        }
         self.pending = Some((id, Instant::now()));
         self.promoted_pending = false;
     }
 
     /// Promote the pending window once it has held focus long enough.
+    /// Dwell switched off mid-wait (a config save) cancels the wait.
     fn check_dwell(&mut self) {
         let Some((id, since)) = self.pending else {
             return;
         };
         if self.promoted_pending {
+            return;
+        }
+        if !self.engine.config().dwell_enabled() {
+            self.pending = None;
             return;
         }
         let dwell = Duration::from_millis(self.engine.config().dwell_ms);
@@ -446,7 +549,7 @@ impl Service {
             return;
         }
         self.promoted_pending = true;
-        self.dispatch(Event::Promoted(id));
+        self.dispatch(Event::Dwelled(id));
     }
 
     /// Re-evaluate desk mode and the managed monitor's geometry.
@@ -460,6 +563,7 @@ impl Service {
         );
         let commands = self.engine.set_screen(screen);
         self.apply(commands);
+        self.tabs_dirty = true;
         let active = is_desk || self.forced;
         if active != self.engine.is_active() {
             self.dispatch(Event::DeskMode(active));
@@ -518,11 +622,28 @@ pub fn run(cfg: Config, config_path: PathBuf) -> windows::core::Result<()> {
         }
     ));
     log::line("running — Ctrl+Alt+Space clears the stage, Ctrl+Alt+D forces desk mode");
+    log::line(&format!(
+        "tabs: tap to promote, drag to move ({}); dwell {}",
+        match service.engine.config().tap_style {
+            config::TapStyle::Tab => "one tab per window, facing center",
+            config::TapStyle::Border => "a border around every window",
+        },
+        if service.engine.config().dwell_enabled() {
+            format!("{} ms, still promotes", service.engine.config().dwell_ms)
+        } else {
+            "off — only the tabs promote".to_string()
+        }
+    ));
 
     let mut running = true;
     let mut last_scan = Instant::now();
     while running {
         pump_messages();
+
+        // A press on a tab is followed from here, not from the tab.
+        if let Some(note) = tab::poll() {
+            post(note);
+        }
 
         while let Ok(note) = rx.try_recv() {
             match note {
@@ -538,6 +659,12 @@ pub fn run(cfg: Config, config_path: PathBuf) -> windows::core::Result<()> {
                 Note::Menu(tray::CMD_LOG) => tray::open_log(),
                 Note::Menu(tray::CMD_QUIT) => running = false,
                 Note::Menu(_) => {}
+                Note::Tap(id) => {
+                    log::line(&format!("tab tap {id:#x}"));
+                    service.dispatch(Event::Promoted(id));
+                }
+                Note::Drag(id, x, y) => service.on_drag(id, x, y),
+                Note::Drop(id, x, y) => service.on_drop(id, x, y),
             }
         }
 
@@ -553,11 +680,15 @@ pub fn run(cfg: Config, config_path: PathBuf) -> windows::core::Result<()> {
         }
 
         service.flights = anim::tick(std::mem::take(&mut service.flights), Instant::now());
+        if service.tabs_dirty {
+            service.sync_tabs();
+        }
         std::thread::sleep(Duration::from_millis(8));
     }
 
     // Leave nothing behind: an icon that outlives its process sits in the
-    // tray until the user happens to hover it.
+    // tray until the user happens to hover it; the tabs go with it.
+    service.tabs.clear();
     tray::remove(hwnd);
     log::line("quit — windows stay where they are");
     Ok(())
