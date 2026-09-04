@@ -45,8 +45,19 @@ exits, so the logon task and a manual run cannot end up fighting each other.
 
 - With the 8K panel attached, focal-desk detects it (any display 5000px or wider
   counts as the desk) and every manageable window flies to a home slot.
-- Click a window — after `dwell_ms` (1.2s by default) it flies to the focal
-  stage and the previous occupant returns to its own home.
+- Every managed window wears a glass **frame**: slim on three sides, thick on
+  the side facing the screen's center, with a neon strip and two ports on the
+  thick side. **Tap the frame** and the window flies to the focal stage — a
+  DWM thumbnail flies, the real window is resized once, when it lands — and the
+  previous occupant returns to its own home. Clicking *into* a window never
+  moves it: focus comes from the frame only (`dwell_ms = 0`; a number brings
+  the old hold-to-promote back).
+- **Drag the frame** past a finger's width and drop it on another slot to give
+  the window a new home; a drop on the stage is a promote. The window on the
+  stage wears a slim ring all round, no thick side.
+- Frames sit behind their window, hide under a fullscreen video and while a
+  window is minimized. A minimized window leaves the layout and takes the first
+  free slot when it comes back (its old home is not reserved yet).
 - Click the desktop to clear the stage.
 - `Ctrl+Alt+Space` also clears the stage, as does **Clear stage** on the tray
   menu.
@@ -72,24 +83,34 @@ there until something moves it. Re-saving the config (even unchanged) puts
 every window back where it belongs, and fixes any window whose first placement
 landed a few pixels out because its frame was still settling when it opened.
 
-One caveat: `gutter_in`, `focal_frac`, `band_frac` and `dwell_ms` take effect
-immediately, but a changed `home` or `focal_fit` applies to windows opened
-*after* the edit. Re-homing windows already on screen is exactly the
+One caveat: the geometry knobs and `dwell_ms` take effect immediately, but a
+changed `slots`, `priority` or `focal_fit` applies to windows opened *after*
+the edit. Re-homing windows already on screen is exactly the
 muscle-memory breakage the layout exists to prevent.
 
 ```
 gutter_in          = 1.5    # structural gap; actively resizes windows
 focal_frac         = 0.56   # width of the focal column
 band_frac          = 0.22   # height of the top/bottom bands
-dwell_ms           = 1200   # focus hold time before promotion
+dwell_ms           = 0      # 0 = frames only; e.g. 1200 = hold-to-promote too
+edge_in            = 0.25   # window to the top/left/right screen edge, inches
+edge_bottom_in     = 0.75   # bottom row to the bottom edge (the taskbar)
+tab_in             = 0.75   # the frame's thick side, inches
+frame_in           = 0.15   # the frame's slim sides, inches
+stage_in           = 0.35   # the stage's ring, inches
 screen_diagonal_in = 65
 force_active       = false  # true = manage windows without the desk display
 
 [app]
 process   = *windowsterminal*
-home      = left-bottom
+slots     = corners          # ordered preferences; `home = X` is the one-slot form
+priority  = true             # claim the first preference even if it is taken
 focal_fit = 0.55 x 1.0
 ```
+
+Rules match by `process`, `title`, `class` or `match` (a substring of any of the
+three). Without `priority`, whichever window is adopted first keeps a slot. A
+broken rule is logged and skipped; the rest of the file still loads.
 
 Slots: `focal`, `left-top`, `left-bottom`, `right-top`, `right-bottom`,
 `top-1`, `top-2`, `bottom-1`, `bottom-2`, `corner-tl`, `corner-tr`,
@@ -130,8 +151,11 @@ process = *obs64*
   only ever hold them wrong. They float instead.
 - **The wallpaper layer — flow field and connection wires — is not implemented
   yet.** The router that computes the wire paths is done and tested; drawing
-  them behind the windows is the next piece of work. Until then, this is the
-  layout engine only.
+  them behind the windows is the next piece of work. The frames' ports are all
+  "free" (silver) until then.
+- **The frames are tinted glass without blur.** Real frosted blur needs a
+  DirectComposition host; the tint, the fade into the window, the strip and the
+  ports are painted per pixel today.
 - The focal stage plus 12 home slots. A 13th window is left unmanaged (floats)
   rather than displacing anything — pinned by `engine::tests::thirteenth_window_floats`.
 
