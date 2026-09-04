@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080">
+  <!-- vector-studio mock rev 3 · focal-desk frames · 2026-09-04 · screen mock, 1 unit = 1 px of a 1920x1080 view of the 8K panel
+       Brief (Ryan): frame encapsulates the whole window; frosted glass, rounded; Vista Aero brought to now with a hint of neon-1980s in
+       the wires; slim ×3, thick toward center; frames BEHIND their window; stage = thin border, no tab.
+       Rev 2 pins: inner edge fades into the window; strip long+thin; connection holes neon (wired) / silver (free); wires land on the stage frame.
+       Rev 3 pins: strip centred on vertical sides, offset on horizontal; holes at the ENDS of the thick side (2); one-line notification box
+       (under the frame on vertical sides, under the strip on horizontal); healthy gap top window ↔ stage; no sheen/horizon line. -->
+  <defs>
+    <linearGradient id="frost" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#E4EEF7" stop-opacity="0.30"/>
+      <stop offset="0.5" stop-color="#C2D2E0" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#93A9BE" stop-opacity="0.16"/>
+    </linearGradient>
+    <radialGradient id="stagehalo" cx="0.5" cy="0.5" r="0.7">
+      <stop offset="0" stop-color="#E6A23C" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#E6A23C" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="fade" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="9"/></filter>
+    <filter id="neon" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="7" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="wireglow" x="-10%" y="-40%" width="120%" height="180%">
+      <feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect data-vs-bg="1" x="0" y="0" width="1920" height="1080" fill="#14140F"/>
+  <g stroke="#FFFFFF" stroke-opacity="0.04" stroke-width="1">
+    <line x1="520" y1="0" x2="520" y2="1080"/><line x1="1400" y1="0" x2="1400" y2="1080"/>
+    <line x1="0" y1="120" x2="1920" y2="120"/><line x1="0" y1="960" x2="1920" y2="960"/>
+  </g>
+  <rect x="440" y="44" width="1040" height="1016" fill="url(#stagehalo)"/>
+  <!-- stage: frame (behind), fade, window (on top), then the thick-side furniture -->
+  <path data-vs="1" data-vs-pts="542,146 1378,146 1378,958 542,958" data-vs-closed="1" data-vs-fillets="0:22,1:22,2:22,3:22" d="M 564,146 L 1356,146 A 22 22 0 0 1 1378,168 L 1378,936 A 22 22 0 0 1 1356,958 L 564,958 A 22 22 0 0 1 542,936 L 542,168 A 22 22 0 0 1 564,146 Z" fill="url(#frost)" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="1.2"/>
+  <rect x="558" y="162" width="804" height="780" rx="14" fill="#14140F" fill-opacity="0.85" filter="url(#fade)"/>
+  <path data-vs="1" data-vs-pts="560,164 1360,164 1360,940 560,940" data-vs-closed="1" data-vs-fillets="0:12,1:12,2:12,3:12" d="M 572,164 L 1348,164 A 12 12 0 0 1 1360,176 L 1360,928 A 12 12 0 0 1 1348,940 L 572,940 A 12 12 0 0 1 560,928 L 560,176 A 12 12 0 0 1 572,164 Z" fill="#23221E" stroke="#3A3934" stroke-width="1"/>
+
+  <!-- left: frame (behind), fade, window (on top), then the thick-side furniture -->
+  <path data-vs="1" data-vs-pts="52,192 502,192 502,918 52,918" data-vs-closed="1" data-vs-fillets="0:20,1:20,2:20,3:20" d="M 72,192 L 482,192 A 20 20 0 0 1 502,212 L 502,898 A 20 20 0 0 1 482,918 L 72,918 A 20 20 0 0 1 52,898 L 52,212 A 20 20 0 0 1 72,192 Z" fill="url(#frost)" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="1.2"/>
+  <rect x="58" y="198" width="404" height="684" rx="14" fill="#14140F" fill-opacity="0.85" filter="url(#fade)"/>
+  <path data-vs="1" data-vs-pts="60,200 460,200 460,880 60,880" data-vs-closed="1" data-vs-fillets="0:12,1:12,2:12,3:12" d="M 72,200 L 448,200 A 12 12 0 0 1 460,212 L 460,868 A 12 12 0 0 1 448,880 L 72,880 A 12 12 0 0 1 60,868 L 60,212 A 12 12 0 0 1 72,200 Z" fill="#23221E" stroke="#3A3934" stroke-width="1"/>
+  <rect x="480" y="440.0" width="3" height="200" rx="1.5" fill="#2FE6FF" filter="url(#neon)"/>
+  <circle cx="481" cy="230" r="7" fill="none" stroke="#C9CDD2" stroke-opacity="0.75" stroke-width="2"/>
+  <circle cx="481" cy="850" r="7" fill="#2FE6FF" fill-opacity="0.9" stroke="#E8FBFF" stroke-width="1.5" filter="url(#neon)"/>
+  <rect x="75" y="893" width="370" height="20" rx="6" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="1"/>
+  <text x="85" y="906" font-family="Segoe UI, Inter, sans-serif" font-size="12" fill="#F4F0E7" fill-opacity="0.35">notification · one line · later</text>
+
+  <!-- topright: frame (behind), fade, window (on top), then the thick-side furniture -->
+  <path data-vs="1" data-vs-pts="1398,52 1868,52 1868,438 1398,438" data-vs-closed="1" data-vs-fillets="0:20,1:20,2:20,3:20" d="M 1418,52 L 1848,52 A 20 20 0 0 1 1868,72 L 1868,418 A 20 20 0 0 1 1848,438 L 1418,438 A 20 20 0 0 1 1398,418 L 1398,72 A 20 20 0 0 1 1418,52 Z" fill="url(#frost)" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="1.2"/>
+  <rect x="1438" y="58" width="424" height="344" rx="14" fill="#14140F" fill-opacity="0.85" filter="url(#fade)"/>
+  <path data-vs="1" data-vs-pts="1440,60 1860,60 1860,400 1440,400" data-vs-closed="1" data-vs-fillets="0:12,1:12,2:12,3:12" d="M 1452,60 L 1848,60 A 12 12 0 0 1 1860,72 L 1860,388 A 12 12 0 0 1 1848,400 L 1452,400 A 12 12 0 0 1 1440,388 L 1440,72 A 12 12 0 0 1 1452,60 Z" fill="#23221E" stroke="#3A3934" stroke-width="1"/>
+  <rect x="1418" y="130.0" width="3" height="200" rx="1.5" fill="#2FE6FF" filter="url(#neon)"/>
+  <circle cx="1419" cy="90" r="7" fill="none" stroke="#C9CDD2" stroke-opacity="0.75" stroke-width="2"/>
+  <circle cx="1419" cy="370" r="7" fill="#2FE6FF" fill-opacity="0.9" stroke="#E8FBFF" stroke-width="1.5" filter="url(#neon)"/>
+  <rect x="1455" y="413" width="390" height="20" rx="6" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="1"/>
+  <text x="1465" y="426" font-family="Segoe UI, Inter, sans-serif" font-size="12" fill="#F4F0E7" fill-opacity="0.35">notification · one line · later</text>
+
+  <!-- botright: frame (behind), fade, window (on top), then the thick-side furniture -->
+  <path data-vs="1" data-vs-pts="1398,672 1868,672 1868,1058 1398,1058" data-vs-closed="1" data-vs-fillets="0:20,1:20,2:20,3:20" d="M 1418,672 L 1848,672 A 20 20 0 0 1 1868,692 L 1868,1038 A 20 20 0 0 1 1848,1058 L 1418,1058 A 20 20 0 0 1 1398,1038 L 1398,692 A 20 20 0 0 1 1418,672 Z" fill="url(#frost)" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="1.2"/>
+  <rect x="1438" y="678" width="424" height="344" rx="14" fill="#14140F" fill-opacity="0.85" filter="url(#fade)"/>
+  <path data-vs="1" data-vs-pts="1440,680 1860,680 1860,1020 1440,1020" data-vs-closed="1" data-vs-fillets="0:12,1:12,2:12,3:12" d="M 1452,680 L 1848,680 A 12 12 0 0 1 1860,692 L 1860,1008 A 12 12 0 0 1 1848,1020 L 1452,1020 A 12 12 0 0 1 1440,1008 L 1440,692 A 12 12 0 0 1 1452,680 Z" fill="#23221E" stroke="#3A3934" stroke-width="1"/>
+  <rect x="1418" y="750.0" width="3" height="200" rx="1.5" fill="#2FE6FF" filter="url(#neon)"/>
+  <circle cx="1419" cy="710" r="7" fill="#2FE6FF" fill-opacity="0.9" stroke="#E8FBFF" stroke-width="1.5" filter="url(#neon)"/>
+  <circle cx="1419" cy="990" r="7" fill="none" stroke="#C9CDD2" stroke-opacity="0.75" stroke-width="2"/>
+  <rect x="1455" y="1033" width="390" height="20" rx="6" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="1"/>
+  <text x="1465" y="1046" font-family="Segoe UI, Inter, sans-serif" font-size="12" fill="#F4F0E7" fill-opacity="0.35">notification · one line · later</text>
+
+  <!-- top: frame (behind), fade, window (on top), then the thick-side furniture -->
+  <path data-vs="1" data-vs-pts="592,0 1328,0 1328,116 592,116" data-vs-closed="1" data-vs-fillets="0:20,1:20,2:20,3:20" d="M 612,0 L 1308,0 A 20 20 0 0 1 1328,20 L 1328,96 A 20 20 0 0 1 1308,116 L 612,116 A 20 20 0 0 1 592,96 L 592,20 A 20 20 0 0 1 612,0 Z" fill="url(#frost)" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="1.2"/>
+  <rect x="598" y="6" width="724" height="70" rx="14" fill="#14140F" fill-opacity="0.85" filter="url(#fade)"/>
+  <path data-vs="1" data-vs-pts="600,8 1320,8 1320,74 600,74" data-vs-closed="1" data-vs-fillets="0:12,1:12,2:12,3:12" d="M 612,8 L 1308,8 A 12 12 0 0 1 1320,20 L 1320,62 A 12 12 0 0 1 1308,74 L 612,74 A 12 12 0 0 1 600,62 L 600,20 A 12 12 0 0 1 612,8 Z" fill="#23221E" stroke="#3A3934" stroke-width="1"/>
+  <rect x="860.0" y="82" width="200" height="3" rx="1.5" fill="#2FE6FF" filter="url(#neon)"/>
+  <rect x="860" y="90" width="200" height="21" rx="6" fill="#FFFFFF" fill-opacity="0.06" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="1"/>
+  <text x="870" y="104" font-family="Segoe UI, Inter, sans-serif" font-size="12" fill="#F4F0E7" fill-opacity="0.35">notification · one line · later</text>
+  <circle cx="630" cy="95" r="7" fill="#2FE6FF" fill-opacity="0.9" stroke="#E8FBFF" stroke-width="1.5" filter="url(#neon)"/>
+  <circle cx="1290" cy="95" r="7" fill="none" stroke="#C9CDD2" stroke-opacity="0.75" stroke-width="2"/>
+
+  <path d="M 481,850 L 542,850" fill="none" stroke="#2FE6FF" stroke-width="2" stroke-opacity="0.9" filter="url(#wireglow)"/>
+  <circle cx="551" cy="850" r="6" fill="#2FE6FF" fill-opacity="0.9" stroke="#E8FBFF" stroke-width="1" filter="url(#neon)"/>
+  <path d="M 1419,370 L 1378,370" fill="none" stroke="#2FE6FF" stroke-width="2" stroke-opacity="0.9" filter="url(#wireglow)"/>
+  <circle cx="1369" cy="370" r="6" fill="#2FE6FF" fill-opacity="0.9" stroke="#E8FBFF" stroke-width="1" filter="url(#neon)"/>
+  <path d="M 1419,710 L 1378,710" fill="none" stroke="#FF3FA4" stroke-width="2" stroke-opacity="0.9" filter="url(#wireglow)"/>
+  <circle cx="1369" cy="710" r="6" fill="#FF3FA4" fill-opacity="0.9" stroke="#E8FBFF" stroke-width="1" filter="url(#neon)"/>
+  <path d="M 630,95 L 630,146" fill="none" stroke="#2FE6FF" stroke-width="2" stroke-opacity="0.9" filter="url(#wireglow)"/>
+  <circle cx="630" cy="155" r="6" fill="#2FE6FF" fill-opacity="0.9" stroke="#E8FBFF" stroke-width="1" filter="url(#neon)"/>
+  <text x="960.0" y="542.0" font-family="Segoe UI, Inter, sans-serif" font-size="26" fill="#E6A23C" fill-opacity="0.9" text-anchor="middle">STAGE</text>
+  <text x="960.0" y="568.0" font-family="Segoe UI, Inter, sans-serif" font-size="15" fill="#F4F0E7" fill-opacity="0.55" text-anchor="middle">border all round, just wide enough for the landings · no tab · it already has focus</text>
+  <text x="260" y="540" font-family="Segoe UI, Inter, sans-serif" font-size="15" fill="#F4F0E7" fill-opacity="0.55" text-anchor="middle">side window</text>
+  <text x="260" y="562" font-family="Segoe UI, Inter, sans-serif" font-size="13" fill="#F4F0E7" fill-opacity="0.4" text-anchor="middle">frame BEHIND the window · slim ×3 · thick toward center</text>
+  <text x="1650" y="230" font-family="Segoe UI, Inter, sans-serif" font-size="15" fill="#F4F0E7" fill-opacity="0.5" text-anchor="middle">terminal — corner slot</text>
+  <text x="1650" y="850" font-family="Segoe UI, Inter, sans-serif" font-size="15" fill="#F4F0E7" fill-opacity="0.5" text-anchor="middle">mail — bottom slot</text>
+  <text x="960" y="48" font-family="Segoe UI, Inter, sans-serif" font-size="15" fill="#F4F0E7" fill-opacity="0.5" text-anchor="middle">household — top slot</text>
+  <text x="70" y="1040" font-family="Segoe UI, Inter, sans-serif" font-size="13" fill="#F4F0E7" fill-opacity="0.45" text-anchor="start">thick side: strip centred (vertical) / offset toward the window (horizontal) · holes at the ENDS — neon when wired, silver when free · wires land on the stage border</text>
+  <text x="70" y="1062" font-family="Segoe UI, Inter, sans-serif" font-size="12" fill="#F4F0E7" fill-opacity="0.35" text-anchor="start">frosted = one gradual gradient, no sheen, no horizon line (real build: DWM acrylic) · notification box INSIDE the glass: foot band (vertical) / under the strip (horizontal) — later</text>
+</svg>
