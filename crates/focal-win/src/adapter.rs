@@ -15,6 +15,13 @@
 //!
 //! Everything policy-shaped lives in `focal-core`; this file only knows
 //! *how* to ask Windows, never *what* to do.
+//!
+//! **Promotions go through [`Service::promote`] and nowhere else** —
+//! every one is logged with its source (`tab`, `drop`, `dwell`), so a
+//! window that lands on the stage uninvited names the gesture in
+//! `focal-desk.log`. An OS foreground change is reported to the engine
+//! as `Event::Foreground` and can move nothing: with dwell off it is
+//! purely informational (REQUESTS-2026-09-04 §1/§2).
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -23,7 +30,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 
 use focal_core::config::{self, Config, Screen};
-use focal_core::engine::{Command, Engine, Event, WinId};
+use focal_core::engine::{Command, Engine, Event, Source, WinId};
 use focal_core::geometry::Rect;
 use focal_core::layout::{self, SlotId};
 use focal_core::tab::TapTarget;
@@ -322,6 +329,34 @@ impl Service {
         self.tabs_dirty = true;
     }
 
+    /// The one door onto the stage from this side: log who asked, then
+    /// tell the engine. Every promotion in `focal-desk.log` therefore
+    /// names its source, and a promotion nobody asked for cannot happen
+    /// without a line here (REQUESTS-2026-09-04 §1).
+    fn promote(&mut self, id: WinId, source: Source) {
+        log::line(&format!(
+            "promote {id:#x} via {} — {}",
+            source.name(),
+            win::window_title(win::hwnd_of(id))
+        ));
+        self.dispatch(Event::Promoted(id, source));
+    }
+
+    /// Tell the engine which window the OS made foreground. The engine
+    /// answers with nothing by contract; should that ever change, the
+    /// commands are dropped here and the log says so, so a foreground
+    /// change can never re-place a window from this side either.
+    fn report_foreground(&mut self, id: WinId) {
+        let commands = self.engine.handle(Event::Foreground(id));
+        if !commands.is_empty() {
+            log::line(&format!(
+                "BUG: a foreground change produced {} command(s); dropped",
+                commands.len()
+            ));
+        }
+        self.tabs_dirty = true;
+    }
+
     /// Put a tap target beside every managed window, at the place the
     /// engine intends for it (its home, or the stage at its fit), and
     /// hide them all while the layout is frozen or inactive.
@@ -376,13 +411,19 @@ impl Service {
     }
 
     /// A dragged tab was released: move its window to the slot under
-    /// the pointer. Off the monitor, nothing happens.
+    /// the pointer — a drop on the focal slot is a promotion and goes
+    /// through [`Self::promote`] so the log names it. Off the monitor,
+    /// nothing happens.
     fn on_drop(&mut self, id: u64, x: i32, y: i32) {
         self.tabs.hide_ghost();
         self.ghost_slot = None;
         if let Some(slot) = self.slot_under(x, y) {
-            log::line(&format!("tab drop {id:#x} -> {}", layout::slot_name(slot)));
-            self.dispatch(Event::MoveTo(id, slot));
+            if slot == layout::FOCAL {
+                self.promote(id, Source::Drop);
+            } else {
+                log::line(&format!("tab drop {id:#x} -> {}", layout::slot_name(slot)));
+                self.dispatch(Event::MoveTo(id, slot));
+            }
         }
     }
 
@@ -513,6 +554,8 @@ impl Service {
             self.dispatch(Event::ClearStage);
             return;
         }
+        // Informational: the engine records it and moves nothing.
+        self.report_foreground(id);
         if self.engine.focused() == Some(id) {
             return;
         }
@@ -549,6 +592,13 @@ impl Service {
             return;
         }
         self.promoted_pending = true;
+        // Named in the log like every other promotion; the engine still
+        // has the last word (it vetoes this while dwell is off).
+        log::line(&format!(
+            "promote {id:#x} via dwell ({} ms in the foreground) — {}",
+            self.engine.config().dwell_ms,
+            win::window_title(win::hwnd_of(id))
+        ));
         self.dispatch(Event::Dwelled(id));
     }
 
@@ -659,10 +709,7 @@ pub fn run(cfg: Config, config_path: PathBuf) -> windows::core::Result<()> {
                 Note::Menu(tray::CMD_LOG) => tray::open_log(),
                 Note::Menu(tray::CMD_QUIT) => running = false,
                 Note::Menu(_) => {}
-                Note::Tap(id) => {
-                    log::line(&format!("tab tap {id:#x}"));
-                    service.dispatch(Event::Promoted(id));
-                }
+                Note::Tap(id) => service.promote(id, Source::Tab),
                 Note::Drag(id, x, y) => service.on_drag(id, x, y),
                 Note::Drop(id, x, y) => service.on_drop(id, x, y),
             }

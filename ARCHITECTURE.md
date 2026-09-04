@@ -25,11 +25,20 @@ the `Command`s that come back. That contract is the whole architecture:
 
 ```rust
 pub enum Event {
-    Opened(WinId, WindowMeta), Promoted(WinId), Closed(WinId),
-    ClearStage, DeskMode(bool), Reconfigured(Config),
+    Opened(WinId, WindowMeta), Promoted(WinId, Source), Dwelled(WinId),
+    Foreground(WinId), MoveTo(WinId, SlotId), Closed(WinId),
+    ClearStage, DeskMode(bool), Suspend(bool), Reconfigured(Config),
 }
+pub enum Source { Tab, Hotkey, Drop, Dwell }
 pub enum Command { Place { win: WinId, to: Rect, animate: bool }, Release(WinId) }
 ```
+
+Two of those are deliberately inert. `Foreground` is what the OS foreground hook
+becomes: the engine records it and never places anything for it — a click into
+a side window, a copy there and a paste elsewhere, move nothing (2026-09-04,
+REQUESTS §1/§2). `Dwelled` is the hold-to-promote timer, and the engine vetoes
+it while `dwell_ms = 0`. Every `Promoted` names its `Source`, and the adapter
+logs it, so a window that reaches the stage uninvited says who sent it.
 
 Three properties fall out of this:
 
@@ -50,7 +59,7 @@ Three properties fall out of this:
 | change dwell time, gutter, tier sizes          | `config.rs` (data, no code)               |
 | give an app a home or a focal fit              | `config.rs` — add an `AppRule`            |
 | change what happens to a 13th window           | one arm in `engine.rs::on_opened`         |
-| add a promotion gesture (hotkey, gaze, …)      | adapter only — it just sends `Promoted`   |
+| add a promotion gesture (hotkey, gaze, …)      | adapter only — it sends `Promoted(win, Source::…)` through `Service::promote`, adding a `Source` variant if none fits; the log names it |
 | add wire behaviors (pulse on notification)     | new `Command` variant + renderer          |
 | leave an app alone entirely                    | `[ignore]` in config — no code            |
 | freeze the layout for a new kind of overlay    | adapter raises `Event::Suspend`           |

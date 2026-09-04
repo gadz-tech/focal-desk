@@ -16,11 +16,24 @@ pub type WinId = u64;
 pub enum Event {
     /// A manageable top-level window appeared.
     Opened(WinId, WindowMeta),
-    /// The user explicitly asked for this window on the stage: a tap on
-    /// its tab, a hotkey, a drop on the focal slot. Always promotes.
-    /// (ARCHITECTURE: a new promotion gesture is adapter-only — it just
-    /// sends this.)
-    Promoted(WinId),
+    /// The user explicitly asked for this window on the stage, and the
+    /// [`Source`] says how: a tap on its tab, a hotkey, a drop on the
+    /// focal slot. Always promotes. Naming the source is what keeps a
+    /// stray promotion from hiding — the adapter logs it, and nothing
+    /// may construct this event without saying who asked
+    /// (REQUESTS-2026-09-04 §1). (ARCHITECTURE: a new promotion gesture
+    /// is adapter-only — it just sends this, with a new `Source` variant
+    /// if none fits.)
+    Promoted(WinId, Source),
+    /// The OS says this window now holds the foreground — a click into
+    /// its body, Alt+Tab, a taskbar click. **Informational only.** The
+    /// engine records it (the adapter may style the active frame from
+    /// it) and never places anything in response: with dwell off, being
+    /// in a window is not a request to move it, and a copy in one side
+    /// window followed by a paste in another must move nothing
+    /// (REQUESTS-2026-09-04 §1, §2). The dwell timer, when it is on at
+    /// all, still arrives separately as [`Event::Dwelled`].
+    Foreground(WinId),
     /// A window held the foreground for the dwell period. (The adapter
     /// owns the timer; the engine only ever sees the decision point.)
     /// Promotes only while `dwell_ms > 0`: with dwell off, being *in* a
@@ -46,6 +59,38 @@ pub enum Event {
     Reconfigured(Config),
 }
 
+/// Who asked for a promotion. Every [`Event::Promoted`] carries one, so
+/// the log can name it and a promotion from anywhere else is a compile
+/// error rather than a mystery (REQUESTS-2026-09-04 §1: "the only sources
+/// of `Promoted` are the tab tap, the hotkey and the drop on the focal
+/// slot").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// A tap on the window's tab (or frame).
+    Tab,
+    /// A promotion hotkey. (None is bound today; the variant exists so
+    /// the next gesture names itself rather than borrowing `Tab`.)
+    Hotkey,
+    /// The window's tab was dragged and dropped on the focal slot.
+    Drop,
+    /// The dwell timer. Only ever reaches the engine as [`Event::Dwelled`],
+    /// which the engine vetoes while `dwell_ms = 0`; the adapter has no
+    /// reason to send `Promoted(_, Dwell)` and does not.
+    Dwell,
+}
+
+impl Source {
+    /// The word the log uses for this source.
+    pub fn name(self) -> &'static str {
+        match self {
+            Source::Tab => "tab",
+            Source::Hotkey => "hotkey",
+            Source::Drop => "drop",
+            Source::Dwell => "dwell",
+        }
+    }
+}
+
 /// Everything the engine can ask the OS layer to do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
@@ -62,6 +107,16 @@ pub struct Engine {
     occupants: HashMap<SlotId, WinId>,
     focused: Option<WinId>,
     suspended: bool,
+    /// The window the OS last reported as foreground. Styling input only.
+    foreground: Option<WinId>,
+    /// The last promotion and who asked for it, for the log and the tests.
+    last_promotion: Option<(WinId, Source)>,
+    /// Windows adopted while the layout was frozen: they have a home but
+    /// have never been placed, and get their one `Place` on resume.
+    deferred: Vec<WinId>,
+    /// Set when the screen or config changed while frozen; the resume then
+    /// re-asserts everyone once, because every rect went stale.
+    retuned_while_frozen: bool,
 }
 
 impl Engine {
@@ -75,6 +130,10 @@ impl Engine {
             occupants: HashMap::new(),
             focused: None,
             suspended: false,
+            foreground: None,
+            last_promotion: None,
+            deferred: Vec::new(),
+            retuned_while_frozen: false,
         }
     }
 
@@ -83,7 +142,8 @@ impl Engine {
         match ev {
             Event::DeskMode(on) => self.set_active(on),
             Event::Opened(id, meta) => self.on_opened(id, meta),
-            Event::Promoted(id) => self.on_promoted(id),
+            Event::Promoted(id, source) => self.on_promoted(id, source),
+            Event::Foreground(id) => self.on_foreground(id),
             Event::Dwelled(id) => self.on_dwelled(id),
             Event::MoveTo(id, slot) => self.on_move_to(id, slot),
             Event::Closed(id) => self.on_closed(id),
@@ -104,6 +164,15 @@ impl Engine {
     /// True while the layout is frozen for an overlay.
     pub fn is_suspended(&self) -> bool {
         self.suspended
+    }
+    /// The window the OS last reported as foreground, if any. Styling
+    /// input, never placement input.
+    pub fn foreground(&self) -> Option<WinId> {
+        self.foreground
+    }
+    /// The most recent promotion and the gesture that asked for it.
+    pub fn last_promotion(&self) -> Option<(WinId, Source)> {
+        self.last_promotion
     }
 
     /// The rectangle the engine intends for a managed window right now:
@@ -133,9 +202,14 @@ impl Engine {
         }
     }
 
-    /// Freeze or resume. Resuming re-asserts every window's position in
-    /// one pass, so anything that drifted while frozen — or opened
-    /// during a capture — is put right the moment the overlay closes.
+    /// Freeze or resume. A resume places only what *changed* while frozen:
+    /// windows adopted during the freeze get their first `Place`, and a
+    /// retune (screen or config) that arrived while frozen re-asserts
+    /// everyone once. A resume caused by nothing more than a foreground
+    /// change — the common case: an overlay closed and the user clicked
+    /// into a window — moves nothing. (Until 2026-09-04 every resume
+    /// re-asserted every window, by design for captures; REQUESTS
+    /// 2026-09-04 §2 retired that: a foreground change never re-places.)
     fn set_suspended(&mut self, on: bool) -> Vec<Command> {
         if on == self.suspended {
             return Vec::new();
@@ -144,7 +218,25 @@ impl Engine {
         if on || !self.active {
             return Vec::new();
         }
-        self.reassert()
+        let deferred = std::mem::take(&mut self.deferred);
+        if std::mem::take(&mut self.retuned_while_frozen) {
+            return self.reassert();
+        }
+        deferred
+            .into_iter()
+            .filter_map(|id| {
+                let slot = *self.homes.get(&id)?;
+                Some(Command::Place { win: id, to: self.intended(id, slot), animate: true })
+            })
+            .collect()
+    }
+
+    /// Record the OS foreground window and do nothing else. This is the
+    /// engine's half of the §1/§2 invariant: whatever the adapter learns
+    /// from the foreground hook, it cannot move a window through here.
+    fn on_foreground(&mut self, id: WinId) -> Vec<Command> {
+        self.foreground = Some(id);
+        Vec::new()
     }
 
     /// A `Place` for every managed window at the position it should
@@ -181,9 +273,14 @@ impl Engine {
     /// focused one on the focal stage at its fit, everyone else at its
     /// own home. Snaps rather than animates — this runs on resolution
     /// changes and live config retunes, where a flight would only lag
-    /// behind the change. An inactive engine commands nothing.
-    fn replace_all(&self) -> Vec<Command> {
+    /// behind the change. An inactive engine commands nothing; a frozen
+    /// one moves nothing under the overlay and settles up on resume.
+    fn replace_all(&mut self) -> Vec<Command> {
         if !self.active {
+            return Vec::new();
+        }
+        if self.suspended {
+            self.retuned_while_frozen = true;
             return Vec::new();
         }
         self.reassert()
@@ -205,6 +302,10 @@ impl Engine {
     /// to normal user control.
     fn set_active(&mut self, on: bool) -> Vec<Command> {
         self.active = on;
+        // Whatever was owed from a freeze is settled by the flight below
+        // (or moot once released).
+        self.deferred.clear();
+        self.retuned_while_frozen = false;
         let cfg = &self.cfg;
         if on {
             // Entering desk mode: everyone flies to their home.
@@ -259,13 +360,18 @@ impl Engine {
                 animate: true,
             }]
         } else {
+            if self.active {
+                // Adopted under an overlay: placed when it lifts.
+                self.deferred.push(id);
+            }
             Vec::new()
         }
     }
 
     /// Put a window on the focal stage (shrunk to its fit hint) and
-    /// send the previously focused window back to its own home.
-    fn on_promoted(&mut self, id: WinId) -> Vec<Command> {
+    /// send the previously focused window back to its own home. The
+    /// source is recorded so the log and the tests can name who asked.
+    fn on_promoted(&mut self, id: WinId, source: Source) -> Vec<Command> {
         if !self.active
             || self.suspended
             || !self.homes.contains_key(&id)
@@ -273,6 +379,7 @@ impl Engine {
         {
             return Vec::new();
         }
+        self.last_promotion = Some((id, source));
         let mut cmds = Vec::new();
         if let Some(prev) = self.focused {
             if let Some(&slot) = self.homes.get(&prev) {
@@ -304,7 +411,7 @@ impl Engine {
         if !self.cfg.dwell_enabled() {
             return Vec::new();
         }
-        self.on_promoted(id)
+        self.on_promoted(id, Source::Dwell)
     }
 
     /// Manual placement: the user dragged a window's tab onto `slot`
@@ -324,7 +431,7 @@ impl Engine {
             return Vec::new();
         };
         if slot == layout::FOCAL {
-            return self.on_promoted(id);
+            return self.on_promoted(id, Source::Drop);
         }
         let was_focused = self.focused == Some(id);
         if slot == old {
@@ -394,8 +501,12 @@ impl Engine {
             self.occupants.remove(&slot);
         }
         self.fits.remove(&id);
+        self.deferred.retain(|&d| d != id);
         if self.focused == Some(id) {
             self.focused = None;
+        }
+        if self.foreground == Some(id) {
+            self.foreground = None;
         }
         Vec::new()
     }
@@ -431,7 +542,7 @@ mod tests {
         let term_home = e.home_of(2).unwrap();
 
         // Terminal promotes onto the stage at its fit, not full size.
-        let cmds = e.handle(Event::Promoted(2));
+        let cmds = e.handle(Event::Promoted(2, Source::Tab));
         let stage = layout::window_rect(&cfg, layout::FOCAL);
         match &cmds[..] {
             [Command::Place { win: 2, to, .. }] => {
@@ -442,7 +553,7 @@ mod tests {
         }
 
         // Promoting the editor sends the terminal back to ITS home.
-        let cmds = e.handle(Event::Promoted(1));
+        let cmds = e.handle(Event::Promoted(1, Source::Tab));
         let term_home_rect = layout::window_rect(&cfg, term_home);
         assert!(cmds.iter().any(
             |c| matches!(c, Command::Place { win: 2, to, .. } if *to == term_home_rect)
@@ -456,10 +567,10 @@ mod tests {
         let (mut e, _) = engine_with_terminal_rule();
         e.handle(Event::DeskMode(true));
         e.handle(Event::Opened(1, meta("a.exe")));
-        e.handle(Event::Promoted(1));
+        e.handle(Event::Promoted(1, Source::Tab));
         // Clicking inside the focused window re-reports it as
         // foreground; nothing may move.
-        assert!(e.handle(Event::Promoted(1)).is_empty());
+        assert!(e.handle(Event::Promoted(1, Source::Tab)).is_empty());
         assert_eq!(e.focused(), Some(1));
     }
 
@@ -469,7 +580,7 @@ mod tests {
         e.handle(Event::DeskMode(true));
         e.handle(Event::Opened(1, meta("a.exe")));
         e.handle(Event::Opened(2, meta("b.exe")));
-        e.handle(Event::Promoted(2));
+        e.handle(Event::Promoted(2, Source::Tab));
         let cmds = e.set_screen(crate::config::Screen::from_px(3840, 2160, 65.0));
         assert_eq!(cmds.len(), 2, "every managed window is re-placed");
         // the focused window goes to the (new) focal stage
@@ -484,7 +595,7 @@ mod tests {
         e.handle(Event::DeskMode(true));
         e.handle(Event::Opened(1, meta("a.exe")));
         let home = e.home_of(1).unwrap();
-        e.handle(Event::Promoted(1));
+        e.handle(Event::Promoted(1, Source::Tab));
         let cmds = e.handle(Event::ClearStage);
         assert_eq!(
             cmds,
@@ -509,16 +620,17 @@ mod tests {
         e.handle(Event::Suspend(true));
         assert!(e.is_suspended());
         // The snip is in progress: nothing may move, for any reason.
-        assert!(e.handle(Event::Promoted(2)).is_empty());
+        assert!(e.handle(Event::Promoted(2, Source::Tab)).is_empty());
         assert!(e.handle(Event::ClearStage).is_empty());
         assert!(e.handle(Event::Opened(3, meta("c.exe"))).is_empty());
         assert_eq!(e.focused(), None);
 
-        // Closing the overlay puts everything back where it belongs.
+        // Closing the overlay places the window that arrived during it;
+        // the two already in place are not touched (2026-09-04 §2: a
+        // resume is not a re-assert — until then all three were snapped).
         let cmds = e.handle(Event::Suspend(false));
-        assert_eq!(cmds.len(), 3, "every managed window is re-asserted");
-        assert!(cmds.iter().all(|c| matches!(
-            c, Command::Place { animate: false, .. })), "no animation on resume");
+        assert_eq!(cmds.len(), 1, "only the newcomer is placed");
+        assert!(matches!(cmds[0], Command::Place { win: 3, animate: true, .. }));
     }
 
     #[test]
@@ -529,7 +641,7 @@ mod tests {
         assert_eq!(cmds, vec![Command::Release(9)]);
         assert_eq!(e.home_of(9), None);
         // and it can never take the stage
-        assert!(e.handle(Event::Promoted(9)).is_empty());
+        assert!(e.handle(Event::Promoted(9, Source::Tab)).is_empty());
     }
 
     #[test]
@@ -554,7 +666,7 @@ mod tests {
         assert_eq!(cmds.len(), 2);
         assert!(cmds.iter().all(|c| matches!(c, Command::Release(_))));
         // Inactive engine ignores promotion.
-        assert!(e.handle(Event::Promoted(1)).is_empty());
+        assert!(e.handle(Event::Promoted(1, Source::Tab)).is_empty());
     }
 
     #[test]
@@ -564,7 +676,7 @@ mod tests {
         e.handle(Event::Opened(1, meta("a.exe")));
         e.handle(Event::Opened(2, meta("windowsterminal.exe")));
         let (home1, home2) = (e.home_of(1).unwrap(), e.home_of(2).unwrap());
-        e.handle(Event::Promoted(2));
+        e.handle(Event::Promoted(2, Source::Tab));
 
         // Widening the gutter is a pure geometry change — the kind a
         // slider makes.
@@ -635,7 +747,7 @@ mod tests {
     fn a_tab_tap_promotes_with_dwell_off() {
         let (mut e, cfg) = tab_only_engine();
         e.handle(Event::Opened(1, meta("a.exe")));
-        let cmds = e.handle(Event::Promoted(1));
+        let cmds = e.handle(Event::Promoted(1, Source::Tab));
         assert_eq!(
             cmds,
             vec![Command::Place { win: 1, to: layout::focal_rect(&cfg, None), animate: true }]
@@ -661,7 +773,7 @@ mod tests {
         let (mut e, cfg) = tab_only_engine();
         e.handle(Event::Opened(1, meta("a.exe")));
         let home = e.home_of(1).unwrap();
-        e.handle(Event::Promoted(1));
+        e.handle(Event::Promoted(1, Source::Tab));
         assert_eq!(e.handle(Event::ClearStage), vec![at_home(&cfg, 1, home)]);
         assert_eq!(e.focused(), None);
     }
@@ -693,7 +805,7 @@ mod tests {
         e.handle(Event::Opened(1, meta("a.exe")));
         e.handle(Event::Opened(2, meta("b.exe")));
         let (h1, h2) = (e.home_of(1).unwrap(), e.home_of(2).unwrap());
-        e.handle(Event::Promoted(1));
+        e.handle(Event::Promoted(1, Source::Tab));
         // Exactly what a tap on 2's tab would do: 1 goes home, 2 takes the stage.
         let cmds = e.handle(Event::MoveTo(2, layout::FOCAL));
         assert_eq!(
@@ -730,7 +842,7 @@ mod tests {
     fn moving_the_focused_window_to_a_slot_leaves_the_stage() {
         let (mut e, cfg) = tab_only_engine();
         e.handle(Event::Opened(1, meta("a.exe")));
-        e.handle(Event::Promoted(1));
+        e.handle(Event::Promoted(1, Source::Tab));
         let target = layout::slot_from_name("right-bottom").unwrap();
         assert_eq!(e.handle(Event::MoveTo(1, target)), vec![at_home(&cfg, 1, target)]);
         assert_eq!(e.focused(), None);
@@ -738,7 +850,7 @@ mod tests {
         // At home already: a drop on its own slot is nothing.
         assert!(e.handle(Event::MoveTo(1, target)).is_empty());
         // From the stage, a drop on its own home is "send it home".
-        e.handle(Event::Promoted(1));
+        e.handle(Event::Promoted(1, Source::Tab));
         assert_eq!(e.handle(Event::MoveTo(1, target)), vec![at_home(&cfg, 1, target)]);
         assert_eq!(e.focused(), None);
     }
@@ -752,14 +864,14 @@ mod tests {
         e.handle(Event::Opened(1, meta("a.exe")));
         e.handle(Event::Opened(2, meta("b.exe")));
         let (h1, h2) = (e.home_of(1).unwrap(), e.home_of(2).unwrap());
-        e.handle(Event::Promoted(1));
+        e.handle(Event::Promoted(1, Source::Tab));
 
         assert_eq!(e.handle(Event::MoveTo(2, h1)), vec![at_home(&cfg, 2, h1)]);
         assert_eq!(e.focused(), Some(1));
         assert_eq!(e.home_of(1), Some(h2));
         assert_eq!(e.home_of(2), Some(h1));
         // Displacing 1 now sends it to its new home.
-        let cmds = e.handle(Event::Promoted(2));
+        let cmds = e.handle(Event::Promoted(2, Source::Tab));
         assert!(cmds.contains(&at_home(&cfg, 1, h2)));
     }
 
@@ -778,13 +890,133 @@ mod tests {
         assert_eq!(e.home_of(1), Some(SlotId(1)), "nothing above changed a home");
     }
 
+    // ---- focus comes from the tab only (2026-09-04, REQUESTS §1/§2) ----
+
+    /// Every command the engine emits for a sequence of events, flattened.
+    fn all_commands(e: &mut Engine, events: Vec<Event>) -> Vec<Command> {
+        events.into_iter().flat_map(|ev| e.handle(ev)).collect()
+    }
+
+    #[test]
+    fn a_foreground_change_never_places_anything() {
+        // Dwell off and dwell on; a window on the stage, one at home, one
+        // unknown: the OS foreground hook can say what it likes and
+        // nothing moves, nothing changes hands.
+        for dwell in [0u64, 1200] {
+            let (_, mut cfg) = engine_with_terminal_rule();
+            cfg.dwell_ms = dwell;
+            let mut e = Engine::new(cfg);
+            e.handle(Event::DeskMode(true));
+            e.handle(Event::Opened(1, meta("a.exe")));
+            e.handle(Event::Opened(2, meta("b.exe")));
+            e.handle(Event::Promoted(1, Source::Tab));
+            let cmds = all_commands(
+                &mut e,
+                vec![
+                    Event::Foreground(2),
+                    Event::Foreground(1),
+                    Event::Foreground(2),
+                    Event::Foreground(77),
+                ],
+            );
+            assert!(cmds.is_empty(), "dwell {dwell}: foreground changes emitted {cmds:?}");
+            assert_eq!(e.focused(), Some(1), "dwell {dwell}: the stage did not change hands");
+            assert_eq!(e.foreground(), Some(77), "the foreground is recorded for styling");
+        }
+    }
+
+    #[test]
+    fn a_body_click_after_an_overlay_moves_nothing() {
+        // The copy-paste case with an overlay in between: Win+V (clipboard
+        // history) freezes the layout, the click into window B resumes
+        // it. Neither the resume nor the foreground change may re-place a
+        // window that already has its place.
+        let (mut e, _) = tab_only_engine();
+        e.handle(Event::Opened(1, meta("a.exe")));
+        e.handle(Event::Opened(2, meta("b.exe")));
+        e.handle(Event::Promoted(1, Source::Tab));
+        assert!(e.handle(Event::Suspend(true)).is_empty());
+        let cmds = all_commands(&mut e, vec![Event::Suspend(false), Event::Foreground(2)]);
+        assert!(cmds.is_empty(), "resume + foreground emitted {cmds:?}");
+        assert_eq!(e.focused(), Some(1));
+    }
+
+    #[test]
+    fn a_resume_places_only_what_arrived_while_frozen() {
+        let (mut e, cfg) = tab_only_engine();
+        e.handle(Event::Opened(1, meta("a.exe")));
+        e.handle(Event::Suspend(true));
+        assert!(e.handle(Event::Opened(2, meta("b.exe"))).is_empty());
+        let home2 = e.home_of(2).unwrap();
+        let cmds = e.handle(Event::Suspend(false));
+        assert_eq!(cmds, vec![at_home(&cfg, 2, home2)], "only the newcomer is placed");
+        // A second freeze/resume has nothing left to do.
+        e.handle(Event::Suspend(true));
+        assert!(e.handle(Event::Suspend(false)).is_empty());
+        // A newcomer that closes before the resume is not placed either.
+        e.handle(Event::Suspend(true));
+        e.handle(Event::Opened(3, meta("c.exe")));
+        e.handle(Event::Closed(3));
+        assert!(e.handle(Event::Suspend(false)).is_empty());
+    }
+
+    #[test]
+    fn a_retune_while_frozen_waits_for_the_resume() {
+        let (mut e, cfg) = tab_only_engine();
+        e.handle(Event::Opened(1, meta("a.exe")));
+        e.handle(Event::Opened(2, meta("b.exe")));
+        e.handle(Event::Suspend(true));
+        let mut wider = cfg.clone();
+        wider.gutter_in = cfg.gutter_in * 2.0;
+        assert!(
+            e.handle(Event::Reconfigured(wider.clone())).is_empty(),
+            "nothing moves under an overlay, not even for a retune"
+        );
+        assert!(e.set_screen(crate::config::Screen::from_px(3840, 2160, 65.0)).is_empty());
+        let cmds = e.handle(Event::Suspend(false));
+        assert_eq!(cmds.len(), 2, "every window is re-asserted under the new geometry");
+        assert!(cmds.iter().all(|c| matches!(c, Command::Place { animate: false, .. })));
+        let home1 = e.home_of(1).unwrap();
+        assert!(cmds.contains(&Command::Place {
+            win: 1,
+            to: layout::window_rect(e.config(), home1),
+            animate: false
+        }));
+    }
+
+    #[test]
+    fn every_promotion_names_its_source() {
+        let (mut e, _) = tab_only_engine();
+        e.handle(Event::Opened(1, meta("a.exe")));
+        e.handle(Event::Opened(2, meta("b.exe")));
+        assert_eq!(e.last_promotion(), None);
+        e.handle(Event::Promoted(1, Source::Tab));
+        assert_eq!(e.last_promotion(), Some((1, Source::Tab)));
+        e.handle(Event::MoveTo(2, layout::FOCAL));
+        assert_eq!(e.last_promotion(), Some((2, Source::Drop)));
+        e.handle(Event::Promoted(1, Source::Hotkey));
+        assert_eq!(e.last_promotion(), Some((1, Source::Hotkey)));
+        // A refused promotion (already on the stage) is not a promotion.
+        e.handle(Event::Promoted(1, Source::Tab));
+        assert_eq!(e.last_promotion(), Some((1, Source::Hotkey)));
+        // Dwell, while it is on, names itself too.
+        let (_, mut cfg) = engine_with_terminal_rule();
+        cfg.dwell_ms = 1200;
+        let mut d = Engine::new(cfg);
+        d.handle(Event::DeskMode(true));
+        d.handle(Event::Opened(1, meta("a.exe")));
+        d.handle(Event::Dwelled(1));
+        assert_eq!(d.last_promotion(), Some((1, Source::Dwell)));
+        assert_eq!(Source::Dwell.name(), "dwell");
+    }
+
     #[test]
     fn placement_follows_focus_and_homes() {
         let (mut e, cfg) = tab_only_engine();
         e.handle(Event::Opened(1, meta("windowsterminal.exe")));
         let home = e.home_of(1).unwrap();
         assert_eq!(e.placement(1), Some(layout::window_rect(&cfg, home)));
-        e.handle(Event::Promoted(1));
+        e.handle(Event::Promoted(1, Source::Tab));
         assert_eq!(
             e.placement(1),
             Some(layout::focal_rect(&cfg, Some(Fit { w: 0.55, h: 1.0 })))

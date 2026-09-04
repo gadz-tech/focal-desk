@@ -78,7 +78,7 @@ fn main() {
 /// Print a narrated simulation of the engine on non-Windows hosts.
 #[cfg(not(windows))]
 fn main() {
-    use focal_core::engine::{Command, Engine, Event};
+    use focal_core::engine::{Command, Engine, Event, Source};
     use focal_core::layout;
 
     println!("focal-desk — headless engine demo");
@@ -108,10 +108,14 @@ fn main() {
             ),
         ),
         (
+            "a click into the terminal's body makes it foreground (informational: nothing moves)",
+            Event::Foreground(0x7E),
+        ),
+        (
             "terminal holds the foreground past the old dwell (off by default: nothing moves)",
             Event::Dwelled(0x7E),
         ),
-        ("editor's tab is tapped", Event::Promoted(0xE1)),
+        ("editor's tab is tapped", Event::Promoted(0xE1, Source::Tab)),
         (
             "terminal's tab is dragged onto corner-tl",
             Event::MoveTo(0x7E, layout::slot_from_name("corner-tl").unwrap()),
