@@ -160,9 +160,9 @@ pub struct Config {
     /// milliseconds. **`0` turns dwell off**: then only an explicit
     /// gesture promotes — a tap on the window's tab, a hotkey — and a
     /// plain click into a window body never moves anything (Ryan,
-    /// 2026-08-28: the 1.35 s delay). Non-zero keeps dwell as the
-    /// fallback alongside the tab; whether it stays at all is an open
-    /// decision for Ryan's first live run with the tabs.
+    /// 2026-08-28: the 1.35 s delay). Off by default since the first live
+    /// run (Ryan, 2026-09-03: the dwell timer *was* the sluggishness);
+    /// non-zero brings hold-to-promote back as a fallback.
     pub dwell_ms: u64,
     /// Tab on the center-facing edge, or a border all the way around.
     pub tap_style: TapStyle,
@@ -191,15 +191,15 @@ pub struct Config {
 
 impl Default for Config {
     /// The setup this project is built around: 65" 8K, 1.5" gutter,
-    /// 56% focal column, 22% bands, 1.2s dwell (kept on by default until
-    /// the tab has been proven live), a 0.75" × 5" tab.
+    /// 56% focal column, 22% bands, dwell off (tab-only, since the
+    /// 2026-09-03 live run), a 0.75" × 5" tab.
     fn default() -> Self {
         Self {
             screen: Screen::desk_65_8k(),
             gutter_in: 1.5,
             focal_frac: 0.56,
             band_frac: 0.22,
-            dwell_ms: 1200,
+            dwell_ms: 0,
             tap_style: TapStyle::Tab,
             tab_in: 0.75,
             tab_length_in: 5.0,
@@ -387,9 +387,9 @@ pub const EXAMPLE: &str = r#"# focal-desk configuration.
 gutter_in          = 1.5    # structural gap; actively resizes windows
 focal_frac         = 0.56   # width of the focal column (fraction of screen)
 band_frac          = 0.22   # height of the top/bottom bands
-dwell_ms           = 1200   # how long a window must hold focus to be promoted;
-                            # 0 = off: only a tap on a window's tab promotes,
-                            # a click into a window body never does
+dwell_ms           = 0      # 0 = off: only a tap on a window's tab promotes, a
+                            # click into a window body never does. Set e.g. 1200
+                            # to bring back hold-the-foreground-to-promote.
 tap_style          = tab    # tab = one tab facing screen center; border = all
                             # the way around. Tap it to promote, drag it to move.
 tab_in             = 0.75   # tab depth / border width, inches (max: half the gutter)
@@ -437,7 +437,7 @@ mod tests {
     fn parses_example_config() {
         let cfg = parse(EXAMPLE).expect("example config must parse");
         assert_eq!(cfg.gutter_in, 1.5);
-        assert_eq!(cfg.dwell_ms, 1200);
+        assert_eq!(cfg.dwell_ms, 0, "the example ships tab-only");
         assert_eq!(cfg.apps.len(), 3);
         let term = &cfg.apps[0];
         assert_eq!(term.home, crate::layout::slot_from_name("left-bottom"));
@@ -507,11 +507,11 @@ mod tests {
     #[test]
     fn dwell_zero_means_off() {
         let mut cfg = Config::default();
-        assert!(cfg.dwell_enabled(), "the shipped default keeps dwell as the fallback");
-        cfg.dwell_ms = 0;
-        assert!(!cfg.dwell_enabled());
-        let parsed = parse("dwell_ms = 0").unwrap();
-        assert!(!parsed.dwell_enabled());
+        assert!(!cfg.dwell_enabled(), "the shipped default is tab-only (2026-09-03)");
+        cfg.dwell_ms = 1200;
+        assert!(cfg.dwell_enabled(), "any non-zero value is the fallback");
+        assert!(parse("dwell_ms = 1200").unwrap().dwell_enabled());
+        assert!(!parse("dwell_ms = 0").unwrap().dwell_enabled());
     }
 
     #[test]

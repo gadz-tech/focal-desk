@@ -645,8 +645,11 @@ mod tests {
 
     #[test]
     fn dwell_still_promotes_while_left_on() {
-        // The fallback: the shipped default keeps dwell_ms = 1200.
-        let (mut e, _) = engine_with_terminal_rule();
+        // The fallback: dwell switched back on in the config (the shipped
+        // default is 0 since the 2026-09-03 live run).
+        let (_, mut cfg) = engine_with_terminal_rule();
+        cfg.dwell_ms = 1200;
+        let mut e = Engine::new(cfg);
         e.handle(Event::DeskMode(true));
         e.handle(Event::Opened(1, meta("a.exe")));
         assert!(matches!(e.handle(Event::Dwelled(1))[..], [Command::Place { win: 1, .. }]));

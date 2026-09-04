@@ -107,7 +107,10 @@ fn main() {
                 },
             ),
         ),
-        ("terminal holds foreground past dwell", Event::Dwelled(0x7E)),
+        (
+            "terminal holds the foreground past the old dwell (off by default: nothing moves)",
+            Event::Dwelled(0x7E),
+        ),
         ("editor's tab is tapped", Event::Promoted(0xE1)),
         (
             "terminal's tab is dragged onto corner-tl",
