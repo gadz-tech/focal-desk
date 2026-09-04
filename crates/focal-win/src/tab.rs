@@ -26,9 +26,10 @@
 //! - `WS_EX_TOOLWINDOW` — no taskbar button, and `win::is_manageable`
 //!   rejects it on sight (it has no title either), so the rescan never
 //!   offers our own frames to the engine;
-//! - **no `WS_EX_TOPMOST`** (§4): a band sits immediately *below* the
-//!   window it belongs to — `SetWindowPos(band, hwndInsertAfter =
-//!   window)`, re-asserted whenever the foreground changes, on
+//! - **no `WS_EX_TOPMOST`** (§4): the four bands hang in a chain
+//!   immediately *below* the window they belong to — `SetWindowPos(band,
+//!   hwndInsertAfter = window)` for the first, each next one below the
+//!   previous — re-asserted whenever the foreground changes, on
 //!   minimize/restore, and on every rescan tick — so the window covers
 //!   the frame's inner region and the ring outside is what shows. A
 //!   frame can never be above a window that is above its own; a
@@ -503,7 +504,12 @@ impl Tabs {
                         fw.solid[k] = true;
                     }
                 }
-                place(hwnd, rects[k], Some(owner), show);
+                // The bands hang in a chain under the owner — the first
+                // directly below the window, each next one below the
+                // previous — so "already in place" holds for all four
+                // and a settled frame costs no z-order calls at all.
+                let below = if k == 0 { owner } else { fw.bands[k - 1] };
+                place(hwnd, rects[k], Some(below), show);
             }
             if repaint {
                 fw.painted = Some((frame.clone(), *active));
