@@ -77,8 +77,9 @@ pub struct Frame {
     pub hole_r: f32,
     /// Where the one-line notification box will sit (§7 — computed, not
     /// drawn): inside the thick band under the strip for a horizontal
-    /// thick side; under the window, clear of the corner arcs, for a
-    /// vertical one (the glass grows a foot band there when §7 lands).
+    /// thick side; for a vertical one, inside the corner window's foot
+    /// band (under a top corner's window, above a bottom corner's), and
+    /// under the frame for a side window, whose glass has no foot yet.
     pub note: Option<Rect>,
 }
 
@@ -190,6 +191,15 @@ pub fn frame(cfg: &Config, rect: Rect, staged: bool) -> Frame {
         Edge::Top => (slim, thick, slim, slim),
         Edge::Bottom => (slim, slim, slim, thick),
     };
+    // A corner window's glass extends on the band side to line up with
+    // the neighbouring top/bottom window's thick frame (Ryan, 2026-09-04,
+    // after the live run): down for a top corner, up for a bottom one.
+    // That foot band is the §7 notification box's home.
+    let vertical = matches!(edge, Edge::Left | Edge::Right);
+    let (sh, band_h) = (cfg.screen.px_h as f32, cfg.band_frac * cfg.screen.px_h as f32);
+    let top_corner = vertical && rect.bottom() <= band_h + 0.5;
+    let bottom_corner = vertical && rect.y >= sh - band_h - 0.5;
+    let (t, b) = (if bottom_corner { thick } else { t }, if top_corner { thick } else { b });
     let outer = Rect::new(rect.x - l, rect.y - t, rect.w + l + r, rect.h + t + b);
     let radius_out = radius_in + slim;
     // The thick band as a rectangle, flush against the window.
@@ -202,7 +212,6 @@ pub fn frame(cfg: &Config, rect: Rect, staged: bool) -> Frame {
     let strip_t = (STRIP_IN * ppi).min(thick / 3.0);
     let hole_r = hole_r_full.min(thick / 2.5);
     let inset = HOLE_INSET_IN * ppi;
-    let vertical = matches!(edge, Edge::Left | Edge::Right);
     let side_len = if vertical { rect.h } else { rect.w };
     // The strip never reaches the holes: leave a hole's width of air.
     let strip_max = (side_len - 2.0 * (inset + 2.0 * hole_r)).max(hole_r);
@@ -218,10 +227,14 @@ pub fn frame(cfg: &Config, rect: Rect, staged: bool) -> Frame {
             strip_len,
         );
         let holes = vec![(cx, rect.y + inset), (cx, rect.bottom() - inset)];
-        // §7's box: under the window, inset past the corner arcs (rev 5).
+        // §7's box, inset past the corner arcs (rev 5): inside the foot
+        // band for a corner window — under the window for a top corner,
+        // above it for a bottom one — and under the frame for a side
+        // window, whose glass has no foot yet.
+        let note_y = if bottom_corner { rect.y - thick + slim } else { rect.bottom() + slim };
         let note = Rect::new(
             rect.x + radius_out,
-            rect.bottom() + slim,
+            note_y,
             (rect.w - 2.0 * radius_out).max(0.0),
             note_h,
         );
@@ -516,8 +529,19 @@ mod tests {
             assert!(within(note, region_px(&cfg, s)), "{name}: box leaves the region");
             match f.thick.unwrap() {
                 Edge::Left | Edge::Right => {
-                    // Under the window, ending before the corner arcs begin.
-                    assert!(note.y >= f.inner.bottom() - 0.01, "{name}: box not under the window");
+                    // Under the window (above it for a bottom corner), ending
+                    // before the corner arcs begin; inside the glass where
+                    // the frame has a foot band.
+                    let bottom_corner = name.starts_with("corner-b");
+                    if bottom_corner {
+                        assert!(note.bottom() <= f.inner.y + 0.01, "{name}: box not above the window");
+                        assert!(note.y >= f.outer.y - 0.01, "{name}: box leaves the foot band");
+                    } else {
+                        assert!(note.y >= f.inner.bottom() - 0.01, "{name}: box not under the window");
+                    }
+                    if name.starts_with("corner-") {
+                        assert!(within(note, f.outer), "{name}: box outside the glass");
+                    }
                     assert!(note.x >= f.inner.x + f.radius_out - 0.01, "{name}: box meets the left arc");
                     assert!(note.right() <= f.inner.right() - f.radius_out + 0.01, "{name}: box meets the right arc");
                 }
@@ -529,6 +553,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn corner_glass_lines_up_with_the_neighbours_frame() {
+        let cfg = Config::default();
+        let f = |n: &str| frame_of(&cfg, n);
+        // Top corners: the foot reaches down to where the top-band
+        // window's thick frame ends — the region boundary.
+        for (corner, neighbour) in [("corner-tl", "top-1"), ("corner-tr", "top-2")] {
+            let (c, n) = (f(corner), f(neighbour));
+            assert!((c.outer.bottom() - n.outer.bottom()).abs() < 0.5, "{corner}: glass bottom {} vs {} {}", c.outer.bottom(), neighbour, n.outer.bottom());
+            assert!((c.outer.bottom() - c.inner.bottom() - cfg.tab_px()).abs() < 0.5, "{corner}: the foot is a thick side deep");
+            assert!((c.inner.y - c.outer.y - cfg.frame_px()).abs() < 0.5, "{corner}: the top stays slim");
+            assert!(within(c.outer, region_px(&cfg, slot(corner))), "{corner}: foot leaves the region");
+        }
+        // Bottom corners: the same, upward, level with the bottom-band
+        // window's thick top frame.
+        for (corner, neighbour) in [("corner-bl", "bottom-1"), ("corner-br", "bottom-2")] {
+            let (c, n) = (f(corner), f(neighbour));
+            assert!((c.outer.y - n.outer.y).abs() < 0.5, "{corner}: glass top {} vs {} {}", c.outer.y, neighbour, n.outer.y);
+            assert!((c.inner.y - c.outer.y - cfg.tab_px()).abs() < 0.5, "{corner}: the foot is a thick side deep");
+            assert!((c.outer.bottom() - c.inner.bottom() - cfg.frame_px()).abs() < 0.5, "{corner}: the bottom stays slim");
+            assert!(within(c.outer, region_px(&cfg, slot(corner))), "{corner}: foot leaves the region");
+        }
+        // Side windows have no foot: slim above and below.
+        for side in ["left-top", "left-bottom", "right-top", "right-bottom"] {
+            let s = f(side);
+            assert!((s.outer.bottom() - s.inner.bottom() - cfg.frame_px()).abs() < 0.5, "{side}");
+            assert!((s.inner.y - s.outer.y - cfg.frame_px()).abs() < 0.5, "{side}");
+        }
+        // And the foot never reaches the side window below/above it.
+        assert!(!overlaps(f("corner-tl").outer, f("left-top").outer));
+        assert!(!overlaps(f("corner-bl").outer, f("left-bottom").outer));
     }
 
     #[test]

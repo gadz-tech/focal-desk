@@ -118,19 +118,24 @@ pub fn slot_group(name: &str) -> Option<Vec<SlotId>> {
     Some(names.iter().filter_map(|n| slot_from_name(n)).collect())
 }
 
-/// Window rect for a slot: region in pixels, inset by half the gutter.
-/// Because neighbouring regions share an edge, two adjacent windows end
-/// up exactly one gutter apart — the structural-gutter invariant.
+/// Window rect for a slot: region in pixels, inset by half the gutter on
+/// every side it shares with a neighbour — so two adjacent windows end up
+/// exactly one gutter apart, the structural-gutter invariant — and by the
+/// screen-edge margin on a side that is the screen's edge: `edge_in` at
+/// the top, left and right, `edge_bottom_in` at the bottom, where the
+/// taskbar lives (2026-09-04, Ryan after the live run: the top and sides
+/// had "really large margins"; until then every side was half a gutter).
 pub fn window_rect(cfg: &Config, slot: SlotId) -> Rect {
     let reg = regions(cfg)[slot.0 as usize];
     let (w, h) = (cfg.screen.px_w as f32, cfg.screen.px_h as f32);
-    Rect::new(
-        reg.frac.x * w,
-        reg.frac.y * h,
-        reg.frac.w * w,
-        reg.frac.h * h,
-    )
-    .inset(cfg.gutter_px() / 2.0)
+    let r = Rect::new(reg.frac.x * w, reg.frac.y * h, reg.frac.w * w, reg.frac.h * h);
+    let half = cfg.gutter_px() / 2.0;
+    let e = 1e-4;
+    let l = if reg.frac.x <= e { cfg.edge_px() } else { half };
+    let t = if reg.frac.y <= e { cfg.edge_px() } else { half };
+    let rr = if reg.frac.x + reg.frac.w >= 1.0 - e { cfg.edge_px() } else { half };
+    let b = if reg.frac.y + reg.frac.h >= 1.0 - e { cfg.edge_bottom_px() } else { half };
+    Rect::new(r.x + l, r.y + t, r.w - l - rr, r.h - t - b)
 }
 
 /// Where a promoted window sits: the focal stage shrunk by the app's
@@ -177,8 +182,39 @@ mod tests {
         assert!(((focal.x - l1.right()) - g).abs() < 0.5);
         // vertical neighbour: top band to focal
         assert!(((focal.y - t1.bottom()) - g).abs() < 0.5);
-        // screen edge: half a gutter
-        assert!((l1.x - g / 2.0).abs() < 0.5);
+        // screen edge: the edge margin (half a gutter until 2026-09-04)
+        assert!((l1.x - cfg.edge_px()).abs() < 0.5);
+    }
+
+    #[test]
+    fn screen_edge_margins_are_their_own_knob() {
+        let cfg = Config::default();
+        let (w, h) = (cfg.screen.px_w as f32, cfg.screen.px_h as f32);
+        let (e, eb, g) = (cfg.edge_px(), cfg.edge_bottom_px(), cfg.gutter_px());
+        let r = |n: &str| window_rect(&cfg, slot_from_name(n).unwrap());
+        // Top, left and right edges: edge_in.
+        assert!((r("corner-tl").x - e).abs() < 0.5 && (r("corner-tl").y - e).abs() < 0.5);
+        assert!((r("top-1").y - e).abs() < 0.5);
+        assert!((w - r("right-top").right() - e).abs() < 0.5);
+        assert!((r("left-bottom").x - e).abs() < 0.5);
+        assert!((w - r("corner-tr").right() - e).abs() < 0.5);
+        // The bottom row keeps its own margin (the taskbar lives there).
+        assert!((h - r("bottom-1").bottom() - eb).abs() < 0.5);
+        assert!((h - r("corner-br").bottom() - eb).abs() < 0.5);
+        // Half an inch more window than the old half-gutter default.
+        let ppi = cfg.screen.px_per_inch();
+        assert!((g / 2.0 - e - 0.5 * ppi).abs() < 0.5);
+        // Gutters between windows are untouched: still exactly one gutter.
+        assert!(((r("left-bottom").y - r("left-top").bottom()) - g).abs() < 0.5);
+        assert!(((r("top-2").x - r("top-1").right()) - g).abs() < 0.5);
+        assert!(((r("left-top").y - r("corner-tl").bottom()) - g).abs() < 0.5);
+        assert!(((r("focal").x - r("left-top").right()) - g).abs() < 0.5);
+        // The knobs are honoured: 0.75 on both is the old layout.
+        let mut old = Config::default();
+        old.edge_in = 0.75;
+        old.edge_bottom_in = 0.75;
+        let tl = window_rect(&old, slot_from_name("corner-tl").unwrap());
+        assert!((tl.x - g / 2.0).abs() < 0.5 && (tl.y - g / 2.0).abs() < 0.5);
     }
 
     #[test]

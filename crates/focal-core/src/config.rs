@@ -182,6 +182,17 @@ pub struct Config {
     /// side, "just thick enough for the landing holes" (REQUESTS
     /// 2026-09-04 §3 rev 4, §6). Clamped to half the gutter.
     pub stage_in: f32,
+    /// Margin between a window and the **top, left or right** edge of the
+    /// screen, in inches (Ryan, 2026-09-04, after the live run: "the top
+    /// and sides have really large margins … make all those windows
+    /// bigger by 1/2\" at least"). It was half a gutter (0.75") until
+    /// then; 0.25" grows those windows by exactly 0.5" toward the edge.
+    /// The gutters between windows are unaffected.
+    pub edge_in: f32,
+    /// Margin between the bottom row and the bottom edge of the screen, in
+    /// inches — the taskbar lives there, and "the bottom row is fine" at
+    /// half a gutter.
+    pub edge_bottom_in: f32,
     /// Physical diagonal of the desk panel, used to convert the
     /// inch-based gutter into pixels once the mode is known.
     pub screen_diagonal_in: f32,
@@ -217,6 +228,8 @@ impl Default for Config {
             tab_length_in: 5.0,
             frame_in: 0.15,
             stage_in: 0.35,
+            edge_in: 0.25,
+            edge_bottom_in: 0.75,
             screen_diagonal_in: 65.0,
             force_active: false,
             apps: Vec::new(),
@@ -287,6 +300,16 @@ impl Config {
     /// The stage frame's width in pixels, clamped to half the gutter.
     pub fn stage_px(&self) -> f32 {
         (self.stage_in * self.screen.px_per_inch()).min(self.gutter_px() / 2.0)
+    }
+
+    /// The top/left/right screen-edge margin in pixels.
+    pub fn edge_px(&self) -> f32 {
+        self.edge_in * self.screen.px_per_inch()
+    }
+
+    /// The bottom screen-edge margin in pixels.
+    pub fn edge_bottom_px(&self) -> f32 {
+        self.edge_bottom_in * self.screen.px_per_inch()
     }
 }
 
@@ -446,6 +469,8 @@ pub fn parse(text: &str) -> Result<Config, String> {
             (Sec::Root, "tab_length_in") => cfg.tab_length_in = num(k, v).map_err(where_)?,
             (Sec::Root, "frame_in") => cfg.frame_in = num(k, v).map_err(where_)?,
             (Sec::Root, "stage_in") => cfg.stage_in = num(k, v).map_err(where_)?,
+            (Sec::Root, "edge_in") => cfg.edge_in = num(k, v).map_err(where_)?,
+            (Sec::Root, "edge_bottom_in") => cfg.edge_bottom_in = num(k, v).map_err(where_)?,
             (Sec::Root, "screen_diagonal_in") => {
                 cfg.screen_diagonal_in = num(k, v).map_err(where_)?
             }
@@ -469,6 +494,8 @@ pub const EXAMPLE: &str = r#"# focal-desk configuration.
 # Restart focal-desk after editing.
 
 gutter_in          = 1.5    # structural gap; actively resizes windows
+edge_in            = 0.25   # window to the top/left/right screen edge, inches
+edge_bottom_in     = 0.75   # bottom row to the bottom edge (the taskbar lives there)
 focal_frac         = 0.56   # width of the focal column (fraction of screen)
 band_frac          = 0.22   # height of the top/bottom bands
 dwell_ms           = 0      # 0 = off: only a tap on a window's tab promotes, a
@@ -701,6 +728,20 @@ mod tests {
         assert!(cfg.warnings[0].contains("line 1") && cfg.warnings[0].contains("retired"), "{}", cfg.warnings[0]);
         // The example carries no retired keys.
         assert!(parse(EXAMPLE).unwrap().warnings.is_empty());
+    }
+
+    #[test]
+    fn edge_margins_parse_and_default() {
+        let cfg = Config::default();
+        assert!((cfg.edge_in - 0.25).abs() < 1e-6, "0.25\" to the top/left/right edge");
+        assert!((cfg.edge_bottom_in - 0.75).abs() < 1e-6, "the bottom row keeps half a gutter");
+        let ppi = cfg.screen.px_per_inch();
+        assert!((cfg.edge_px() - 0.25 * ppi).abs() < 1e-3);
+        assert!((cfg.edge_bottom_px() - 0.75 * ppi).abs() < 1e-3);
+        let cfg = parse("edge_in = 0.1\nedge_bottom_in = 0.5").unwrap();
+        assert!((cfg.edge_in - 0.1).abs() < 1e-6 && (cfg.edge_bottom_in - 0.5).abs() < 1e-6);
+        let ex = parse(EXAMPLE).unwrap();
+        assert!((ex.edge_in - 0.25).abs() < 1e-6 && (ex.edge_bottom_in - 0.75).abs() < 1e-6);
     }
 
     #[test]
