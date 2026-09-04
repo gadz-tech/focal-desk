@@ -985,6 +985,35 @@ mod tests {
     }
 
     #[test]
+    fn a_move_emits_exactly_one_final_place() {
+        // §9: the flight is the adapter's business. The engine says where
+        // a window ends up — once, the final rectangle — and never an
+        // intermediate one; the adapter animates a snapshot toward it and
+        // resizes the real window a single time.
+        let (mut e, cfg) = tab_only_engine();
+        e.handle(Event::Opened(1, meta("a.exe")));
+        e.handle(Event::Opened(2, meta("b.exe")));
+        let target = layout::slot_from_name("corner-br").unwrap();
+        assert_eq!(e.handle(Event::MoveTo(1, target)), vec![at_home(&cfg, 1, target)]);
+        // A promote is the same: one final Place per window that moves.
+        assert_eq!(
+            e.handle(Event::Promoted(2, Source::Tab)),
+            vec![Command::Place { win: 2, to: layout::focal_rect(&cfg, None), animate: true }]
+        );
+        let cmds = e.handle(Event::Promoted(1, Source::Tab));
+        let for_1: Vec<&Command> =
+            cmds.iter().filter(|c| matches!(c, Command::Place { win: 1, .. })).collect();
+        assert_eq!(for_1.len(), 1, "the mover gets exactly one Place");
+        assert_eq!(
+            for_1[0],
+            &Command::Place { win: 1, to: layout::focal_rect(&cfg, None), animate: true }
+        );
+        let h2 = e.home_of(2).unwrap();
+        assert_eq!(cmds.len(), 2, "…and the displaced window gets exactly one");
+        assert!(cmds.contains(&at_home(&cfg, 2, h2)));
+    }
+
+    #[test]
     fn every_promotion_names_its_source() {
         let (mut e, _) = tab_only_engine();
         e.handle(Event::Opened(1, meta("a.exe")));

@@ -10,7 +10,8 @@
 //! 3. rescan the window list a couple of times a second for opens/closes;
 //! 4. promote whatever has held the foreground for `dwell_ms` (if dwell
 //!    is on at all — `dwell_ms = 0` leaves the tabs as the only way);
-//! 5. advance in-flight animations;
+//! 5. advance in-flight animations (a snapshot flies; the window is
+//!    resized once, when it lands — §9);
 //! 6. put a tap target beside every managed window if anything changed.
 //!
 //! Everything policy-shaped lives in `focal-core`; this file only knows
@@ -476,19 +477,25 @@ impl Service {
                     // last sent. Those differ once the user drags one,
                     // and comparing the live rect is what lets a
                     // layout-wide re-assert put a dragged window back.
-                    if !self.flights.iter().any(|f| f.id == win) && nearly(from, compensated) {
+                    let in_flight = self.flights.iter().any(|f| f.id == win && !f.has_landed());
+                    if !in_flight && nearly(from, compensated) {
                         continue;
                     }
                     self.flights.retain(|f| f.id != win);
                     if animate {
-                        self.flights.push(Flight {
-                            id: win,
+                        // The snapshot flies from the visible frame here
+                        // to the visible frame there; the window itself
+                        // gets one SetWindowPos, to `compensated`, when
+                        // the flight lands (§9).
+                        self.flights.push(Flight::new(
+                            win,
                             hwnd,
                             from,
-                            to: compensated,
-                            started: now,
-                            duration: Duration::from_millis(260),
-                        });
+                            compensated,
+                            (win::visible_rect(hwnd), target),
+                            now,
+                            Duration::from_millis(260),
+                        ));
                     } else {
                         anim::place_now(hwnd, compensated);
                     }
@@ -534,11 +541,11 @@ impl Service {
     }
 
     /// Finish every flight instantly, leaving each window at its final
-    /// rectangle. Used when an overlay appears: a capture must see a
-    /// still screen, not one mid-animation.
+    /// rectangle and no snapshot on screen. Used when an overlay appears:
+    /// a capture must see a still screen, not one mid-animation.
     fn settle_flights(&mut self) {
         for flight in std::mem::take(&mut self.flights) {
-            anim::place_now(flight.hwnd, flight.to);
+            flight.settle();
         }
     }
 

@@ -120,9 +120,13 @@ adapter everywhere else. The four things worth knowing:
 - **`frame.rs`** — `GetWindowRect` lies (~7px invisible resize borders, varies
   per app). Measure `DWMWA_EXTENDED_FRAME_BOUNDS` and compensate, or every
   gutter looks ragged.
-- **`anim.rs`** — flights run our own ease-out loop; `SWP_NOACTIVATE` so a
-  flight never steals focus (promotion must not feed itself), batched through
-  `DeferWindowPos`.
+- **`anim.rs` + `snapshot.rs`** — flights run our own ease-out loop;
+  `SWP_NOACTIVATE | SWP_NOZORDER` so a flight never steals focus (promotion
+  must not feed itself) or reorders anything. Since 2026-09-04 (§9) what flies
+  is a DWM thumbnail of the window in a host window of ours; the real window
+  is resized **once**, when the flight lands, and the likeness lingers two
+  frames so the app can paint at its new size. Fusion and KiCad re-create
+  their GPU surfaces on every resize and broke under the old per-frame one.
 - **`dock.rs`** — desk mode = the 7680x4320 panel is present. Re-checked on
   `WM_DISPLAYCHANGE`/`WM_DEVICECHANGE`; transitions become `Event::DeskMode`,
   and undocking releases every window (`Command::Release`) — the service is

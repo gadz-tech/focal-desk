@@ -11,6 +11,7 @@
 //! - [`dock`]    — desk-mode detection (is the big panel present?)
 //! - [`win`]     — small safe wrappers over the raw Win32 calls
 //! - [`log`]     — the log file, since the service has no console
+//! - [`snapshot`] — the flying likeness: a DWM thumbnail moves, the window is resized once (2026-09-04)
 //! - [`tray`]    — the notification-area icon and its menu
 //! - [`tab`]     — the tap targets: tap to promote, drag to move (2026-09-03)
 //! - [`adapter`] — the service loop that ties it together
@@ -27,6 +28,8 @@ pub mod frame;
 pub mod hook;
 #[cfg(windows)]
 pub mod log;
+#[cfg(windows)]
+pub mod snapshot;
 #[cfg(windows)]
 pub mod tab;
 #[cfg(windows)]
