@@ -65,7 +65,9 @@ Three properties fall out of this:
 | freeze the layout for a new kind of overlay    | adapter raises `Event::Suspend`           |
 | swap the whole layout (strip, twin-focal, …)   | `layout.rs::regions` — same slot ids      |
 | draw/remove soft wires                         | new `Event` variants, engine state        |
-| move a window by hand (2026-09-03: drag its tab) | adapter sends `Event::MoveTo(win, slot)`; `layout::slot_at` names the slot under the pointer; the tab itself is `tab.rs` geometry in core + `focal-win/tab.rs` windows |
+| move a window by hand (2026-09-03: drag its tab) | adapter sends `Event::MoveTo(win, slot)`; `layout::slot_at` names the slot under the pointer |
+| change what the frame looks like (2026-09-04)  | `tab.rs` in core lays it out (`Frame`: slim ×3 + thick toward center, strip, holes, the §7 box's place), `paint.rs` in core rasterizes a band of it — both pure, tested on Linux; `focal-win/tab.rs` only hosts four band windows per frame and blits the pixels |
+| give an app a slot preference or priority (§8) | `[app]` in config: `slots = corners` / `top, bottom`, `priority = true`; the engine's `on_opened` and `displace` — a hand drag pins a window against every rule |
 
 ## Layout: the structural gutter
 

@@ -11,5 +11,6 @@ pub mod config;
 pub mod engine;
 pub mod geometry;
 pub mod layout;
+pub mod paint;
 pub mod tab;
 pub mod wires;

@@ -48,30 +48,6 @@ impl Default for Fit {
     }
 }
 
-/// The shape of the tap target beside every managed window (Ryan,
-/// 2026-08-28: "a border around each window … all the way around, or
-/// maybe a tab that is always facing the center of the screen"). Both
-/// are drawn by the adapter from `tab.rs` geometry; which one is a
-/// matter of feel, so it is config, not code.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TapStyle {
-    /// One tab on the edge that faces the screen center.
-    Tab,
-    /// A ring around the whole window, `tab_in` wide.
-    Border,
-}
-
-impl TapStyle {
-    /// Parse the config spelling: `tab` or `border`, case-insensitive.
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name.trim().to_lowercase().as_str() {
-            "tab" => Some(TapStyle::Tab),
-            "border" => Some(TapStyle::Border),
-            _ => None,
-        }
-    }
-}
-
 /// What the adapter reports about a window when it appears.
 #[derive(Clone, Debug, Default)]
 pub struct WindowMeta {
@@ -188,15 +164,15 @@ pub struct Config {
     /// run (Ryan, 2026-09-03: the dwell timer *was* the sluggishness);
     /// non-zero brings hold-to-promote back as a fallback.
     pub dwell_ms: u64,
-    /// Tab on the center-facing edge, or a border all the way around.
-    pub tap_style: TapStyle,
-    /// Depth of the tab (or width of the border), in inches — a physical
-    /// quantity like the gutter, so it survives a resolution change. It
-    /// is clamped to half the gutter at layout time: a tap target never
-    /// leaves its own window's side of the channel, so targets never
-    /// overlap each other or any window.
+    /// Width of the thick side of a window's frame — the side facing
+    /// screen center — in inches, a physical quantity like the gutter,
+    /// so it survives a resolution change. It is clamped to half the
+    /// gutter at layout time: a frame never leaves its own window's side
+    /// of the channel, so frames never overlap each other or any window.
+    /// (Was the tab's depth; `tap_style` itself is retired, 2026-09-04.)
     pub tab_in: f32,
-    /// Length of the tab along its edge, in inches (clamped to the edge).
+    /// Length of the neon strip along the thick side, in inches (clamped
+    /// to the side; it was the tab's length).
     pub tab_length_in: f32,
     /// Width of the slim sides of a window's frame, in inches — the
     /// three sides that do not face the screen center (2026-09-04,
@@ -228,8 +204,8 @@ pub struct Config {
 impl Default for Config {
     /// The setup this project is built around: 65" 8K, 1.5" gutter,
     /// 56% focal column, 22% bands, dwell off (tab-only, since the
-    /// 2026-09-03 live run), a 0.75" × 5" tab, 0.15" slim frame sides
-    /// and a 0.35" stage ring.
+    /// 2026-09-03 live run), a 0.75" thick frame side with a 5" strip,
+    /// 0.15" slim sides and a 0.35" stage ring.
     fn default() -> Self {
         Self {
             screen: Screen::desk_65_8k(),
@@ -237,7 +213,6 @@ impl Default for Config {
             focal_frac: 0.56,
             band_frac: 0.22,
             dwell_ms: 0,
-            tap_style: TapStyle::Tab,
             tab_in: 0.75,
             tab_length_in: 5.0,
             frame_in: 0.15,
@@ -292,13 +267,13 @@ impl Config {
         self.dwell_ms > 0
     }
 
-    /// Tab depth (border width) in pixels, clamped to half the gutter so
-    /// the target stays inside its own window's half of the channel.
+    /// The thick frame side in pixels, clamped to half the gutter so the
+    /// frame stays inside its own window's half of the channel.
     pub fn tab_px(&self) -> f32 {
         (self.tab_in * self.screen.px_per_inch()).min(self.gutter_px() / 2.0)
     }
 
-    /// Tab length in pixels (before clamping to the edge it sits on).
+    /// The neon strip's length in pixels (before clamping to the side).
     pub fn tab_length_px(&self) -> f32 {
         self.tab_length_in * self.screen.px_per_inch()
     }
@@ -460,10 +435,13 @@ pub fn parse(text: &str) -> Result<Config, String> {
             (Sec::Root, "focal_frac") => cfg.focal_frac = num(k, v).map_err(where_)?,
             (Sec::Root, "band_frac") => cfg.band_frac = num(k, v).map_err(where_)?,
             (Sec::Root, "dwell_ms") => cfg.dwell_ms = num(k, v).map_err(where_)?,
-            (Sec::Root, "tap_style") => {
-                cfg.tap_style = TapStyle::from_name(v)
-                    .ok_or_else(|| where_(format!("tap_style wants tab or border, got {v:?}")))?
-            }
+            // Retired 2026-09-04 (§3): every window gets a frame that is
+            // tab and border made one. Older conf files still say it;
+            // that is a note in the log, not a refusal.
+            (Sec::Root, "tap_style") => cfg.warnings.push(where_(
+                "tap_style is retired (2026-09-04): every window gets a frame; the line is ignored"
+                    .into(),
+            )),
             (Sec::Root, "tab_in") => cfg.tab_in = num(k, v).map_err(where_)?,
             (Sec::Root, "tab_length_in") => cfg.tab_length_in = num(k, v).map_err(where_)?,
             (Sec::Root, "frame_in") => cfg.frame_in = num(k, v).map_err(where_)?,
@@ -496,10 +474,10 @@ band_frac          = 0.22   # height of the top/bottom bands
 dwell_ms           = 0      # 0 = off: only a tap on a window's tab promotes, a
                             # click into a window body never does. Set e.g. 1200
                             # to bring back hold-the-foreground-to-promote.
-tap_style          = tab    # tab = one tab facing screen center; border = all
-                            # the way around. Tap it to promote, drag it to move.
-tab_in             = 0.75   # tab depth / border width, inches (max: half the gutter)
-tab_length_in      = 5      # tab length along its edge, inches
+tab_in             = 0.75   # the thick side of a window's frame (faces screen
+                            # center), inches (max: half the gutter). Tap the
+                            # frame to promote, drag it to move.
+tab_length_in      = 5      # the neon strip along the thick side, inches
 frame_in           = 0.15   # the slim sides of a window's frame, inches
 stage_in           = 0.35   # the stage's frame: slim all round, no tab, inches
 screen_diagonal_in = 65     # physical size of the desk panel
@@ -708,16 +686,21 @@ mod tests {
     }
 
     #[test]
-    fn tap_target_keys_parse_and_reject_typos() {
-        let cfg = parse("tap_style = border\ntab_in = 1\ntab_length_in = 3.5").unwrap();
-        assert_eq!(cfg.tap_style, TapStyle::Border);
+    fn frame_keys_parse_and_tap_style_is_a_retired_no_op() {
+        let cfg = parse("tab_in = 1\ntab_length_in = 3.5").unwrap();
         assert!((cfg.tab_in - 1.0).abs() < 1e-6);
         assert!((cfg.tab_length_in - 3.5).abs() < 1e-6);
-        assert_eq!(parse("tap_style = TAB").unwrap().tap_style, TapStyle::Tab);
-        let err = parse("tap_style = ring").unwrap_err();
-        assert!(err.contains("tab or border"), "got {err}");
-        // The example config spells out every knob, so it must carry them.
-        assert_eq!(parse(EXAMPLE).unwrap().tap_style, TapStyle::Tab);
+        assert!(cfg.warnings.is_empty());
+        // A conf written before 2026-09-04 still says tap_style: it loads,
+        // with a line in the log, rather than refusing and dropping every
+        // [app] rule with it.
+        let cfg = parse("tap_style = border\ngutter_in = 2\n[app]\nprocess = a\nhome = focal").unwrap();
+        assert_eq!(cfg.gutter_in, 2.0);
+        assert_eq!(cfg.apps.len(), 1);
+        assert_eq!(cfg.warnings.len(), 1);
+        assert!(cfg.warnings[0].contains("line 1") && cfg.warnings[0].contains("retired"), "{}", cfg.warnings[0]);
+        // The example carries no retired keys.
+        assert!(parse(EXAMPLE).unwrap().warnings.is_empty());
     }
 
     #[test]

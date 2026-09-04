@@ -1,48 +1,52 @@
-//! The tap targets on screen: one small layered window per managed
-//! window, put where `focal_core::tab` says. Tap → [`Note::Tap`]; drag
-//! past the slop → [`Note::Drag`] as it moves and [`Note::Drop`] on
-//! release; the adapter turns those into `Event::Promoted` and
-//! `Event::MoveTo`. Tab or border is `tap_style` in the config.
+//! The frames on screen (REQUESTS-2026-09-04 §3, §4): four small
+//! per-pixel-alpha layered windows per managed window — one per band of
+//! the frame `focal_core::tab` lays out — painted by `focal_core::paint`
+//! and blitted with `UpdateLayeredWindow`. Tap → [`Note::Tap`]; drag past
+//! the slop → [`Note::Drag`] as it moves and [`Note::Drop`] on release;
+//! the adapter turns those into `Event::Promoted` and `Event::MoveTo`.
 //!
-//! Written 2026-09-03, compiled and unit-tested, **never launched** —
-//! the first live run is Ryan's, on a day he is not living in Fusion.
+//! Written 2026-09-03 as one amber tab per window, reshaped 2026-09-04
+//! into the frame; compiled and unit-tested, **never launched** — the
+//! first live run is Ryan's.
 //!
-//! Why a real window per target rather than a hit region on the planned
-//! wallpaper layer: a window is the one thing Windows will reliably
+//! Why real windows: a window is the one thing Windows will reliably
 //! hit-test and deliver mouse messages to on top of another process's
-//! window. Three flags keep it out of the way of everything else here:
+//! window. Why four per frame rather than one: a layered window needs a
+//! bitmap the size of its whole rectangle, and one frame-sized bitmap
+//! per window would be a hundred megabytes of mostly-transparent hole
+//! on the 8K panel; four bands are a few hundred kilobytes. The flags:
 //!
+//! - `WS_EX_LAYERED` with `UpdateLayeredWindow` — per-pixel alpha: the
+//!   rounded corners and the inner fade are painted, and a fully
+//!   transparent pixel is not part of the window, so the corners are
+//!   click-through with no region to manage;
 //! - `WS_EX_NOACTIVATE` — clicking it never makes it the foreground
 //!   window, so the app underneath keeps focus and the foreground hook
 //!   stays quiet (`WM_MOUSEACTIVATE` says the same thing again);
 //! - `WS_EX_TOOLWINDOW` — no taskbar button, and `win::is_manageable`
 //!   rejects it on sight (it has no title either), so the rescan never
-//!   offers our own tabs to the engine;
-//! - **no `WS_EX_TOPMOST`** (2026-09-04, REQUESTS §4): a target sits
-//!   immediately *below* the window it belongs to — `SetWindowPos(target,
-//!   hwndInsertAfter = window)`, re-asserted whenever the foreground
-//!   changes, on minimize/restore, and on every rescan tick — so the
-//!   window covers the target's inner region and the visible part is the
-//!   ring outside. A target can never be above a window that is above
-//!   its own window; a fullscreen foreground hides them all (the adapter
-//!   decides that); a minimized, hidden or off-monitor window hides its
-//!   own. Until then targets were topmost, and stayed over a fullscreen
-//!   YouTube. The drop ghost is the one topmost window left here: it
-//!   exists only during a drag and the mouse goes straight through it.
+//!   offers our own frames to the engine;
+//! - **no `WS_EX_TOPMOST`** (§4): a band sits immediately *below* the
+//!   window it belongs to — `SetWindowPos(band, hwndInsertAfter =
+//!   window)`, re-asserted whenever the foreground changes, on
+//!   minimize/restore, and on every rescan tick — so the window covers
+//!   the frame's inner region and the ring outside is what shows. A
+//!   frame can never be above a window that is above its own; a
+//!   fullscreen foreground hides them all (the adapter decides that); a
+//!   minimized, hidden or off-monitor window hides its own. The drop
+//!   ghost is the one topmost window left here: it exists only during a
+//!   drag and the mouse goes straight through it.
 //!
-//! The border variant is the same window wearing a ring-shaped region
-//! (`SetWindowRgn`): the interior is not part of the window at all, so
-//! clicks there reach the app. (`HTTRANSPARENT` would not do — it only
-//! passes clicks to windows of the *same thread*.) Every target hides
-//! while the layout is frozen for an overlay, so a screen capture never
-//! has a tab in it.
+//! Every frame hides while the layout is frozen for an overlay, so a
+//! screen capture never has one in it. Pixels are repainted only when a
+//! band's geometry or its active state changes.
 //!
 //! The drag is **polled, not captured**. `SetCapture` from a window
 //! that does not hold the foreground only delivers mouse messages while
 //! the pointer is over that window (documented), and ours never holds
 //! the foreground by design — so the button-down is the only message
-//! we take from the tab, and the main loop asks for the live button and
-//! pointer every tick ([`poll`]) until the button comes up.
+//! we take from the frame, and the main loop asks for the live button
+//! and pointer every tick ([`poll`]) until the button comes up.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
@@ -50,51 +54,55 @@ use std::sync::{Mutex, MutexGuard};
 
 use focal_core::engine::WinId;
 use focal_core::geometry::Rect;
-use focal_core::tab::TapTarget;
+use focal_core::paint::{self, Pixels};
+use focal_core::tab::Frame;
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CombineRgn, CreateRectRgn, CreateSolidBrush, DeleteObject, FillRect, SetWindowRgn, HDC,
-    RGN_DIFF,
+    CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, DeleteDC, DeleteObject, FillRect,
+    GetDC, ReleaseDC, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER,
+    BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HDC,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
     GetSystemMetrics, GetWindowLongPtrW, LoadCursorW, RegisterClassW,
-    SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_USERDATA,
-    HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MA_NOACTIVATE, SM_SWAPBUTTON, SWP_HIDEWINDOW,
-    SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, WM_ERASEBKGND, WM_LBUTTONDOWN,
-    WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow, UpdateLayeredWindow,
+    GWLP_USERDATA, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MA_NOACTIVATE, SM_SWAPBUTTON,
+    SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, ULW_ALPHA,
+    WM_ERASEBKGND, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use crate::adapter::Note;
 use crate::win;
 
-/// The one window class every target shares.
+/// The one window class every frame band and the ghost share.
 const CLASS: PCWSTR = w!("focal_desk_tab");
-/// Amber — the accent of the retired mock — as a GDI `0x00BBGGRR`.
-const TAB_COLOR: COLORREF = COLORREF(0x003CA2E6);
-/// Bone white for the drop highlight.
+/// Bone white for the drop highlight, as a GDI `0x00BBGGRR`.
 const GHOST_COLOR: COLORREF = COLORREF(0x00E7F0F4);
-/// Tab opacity, 0–255: visible, not loud.
-const TAB_ALPHA: u8 = 110;
 /// Drop-highlight opacity.
 const GHOST_ALPHA: u8 = 70;
+/// Amber — the 2026-09-03 tab — as a GDI `0x00BBGGRR`: what a band falls
+/// back to if Windows refuses the per-pixel update, so a frame is never
+/// invisible.
+const FALLBACK_COLOR: COLORREF = COLORREF(0x003CA2E6);
+/// The fallback's uniform opacity.
+const FALLBACK_ALPHA: u8 = 110;
 /// How far the pointer must travel before a press becomes a drag, in
 /// pixels — about 0.2" on the 8K panel. A tap with a shaky hand stays
 /// a tap.
 pub const SLOP_PX: i32 = 28;
 
-/// The press in progress on some tab, if any. One at a time: the mouse
-/// has one button, and every tab lives on the main thread.
+/// The press in progress on some frame, if any. One at a time: the
+/// mouse has one button, and every frame lives on the main thread.
 static PRESS: Mutex<Option<Press>> = Mutex::new(None);
 
-/// A button press on a tab and what it has become so far.
+/// A button press on a frame and what it has become so far.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Press {
-    /// The managed window whose tab was pressed.
+    /// The managed window whose frame was pressed.
     pub win: WinId,
     /// Where the button went down, virtual-desktop pixels.
     pub start: (i32, i32),
@@ -143,7 +151,7 @@ impl Press {
 }
 
 /// The press slot. A poisoned lock (a panic elsewhere on this thread)
-/// must not disable every tab, so the poison is simply ignored.
+/// must not disable every frame, so the poison is simply ignored.
 fn lock() -> MutexGuard<'static, Option<Press>> {
     PRESS.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -183,14 +191,15 @@ pub fn poll() -> Option<Note> {
     })
 }
 
-/// The managed window a target belongs to, stashed in its user data.
+/// The managed window a band belongs to, stashed in its user data.
 /// Zero is the ghost, which belongs to nobody.
 fn owner_of(hwnd: HWND) -> WinId {
     unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as u64 }
 }
 
-/// Window procedure shared by every target. It records the press and
-/// paints; [`poll`] does the rest from the main loop.
+/// Window procedure shared by every band and the ghost. It records the
+/// press and paints the ghost; [`poll`] does the rest from the main loop.
+/// A band's pixels come from `UpdateLayeredWindow`, never from here.
 unsafe extern "system" fn tab_proc(
     hwnd: HWND,
     msg: u32,
@@ -198,15 +207,16 @@ unsafe extern "system" fn tab_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
-        // Never take focus: the app under the tab keeps it.
+        // Never take focus: the app under the frame keeps it.
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
-        // Solid fill in the target's own color; the layered alpha set at
-        // creation makes it translucent.
+        // The ghost is a solid fill under a uniform alpha, and so is a
+        // band that fell back from per-pixel painting; a band painted
+        // through `UpdateLayeredWindow` never shows this fill.
         WM_ERASEBKGND => {
             let hdc = HDC(wparam.0 as *mut c_void);
             let mut rc = RECT::default();
             let _ = GetClientRect(hwnd, &mut rc);
-            let color = if owner_of(hwnd) == 0 { GHOST_COLOR } else { TAB_COLOR };
+            let color = if owner_of(hwnd) == 0 { GHOST_COLOR } else { FALLBACK_COLOR };
             let brush = CreateSolidBrush(color);
             FillRect(hdc, &rc, brush);
             let _ = DeleteObject(brush.into());
@@ -241,20 +251,19 @@ fn register_class() {
     }
 }
 
-/// Make one target window: a layered, non-activating popup with a
-/// uniform alpha. `owner` goes in the user data so the procedure knows
-/// whose tab was pressed. A target is never topmost (§4); the ghost is,
-/// and is also `WS_EX_TRANSPARENT`: the mouse goes straight through it
-/// while it marks the drop slot.
-fn create(owner: WinId, alpha: u8, click_through: bool, topmost: bool) -> Option<HWND> {
+/// Make one window of the shared class: layered, non-activating, no
+/// taskbar button, `owner` in the user data so the procedure knows whose
+/// frame was pressed. A frame band is painted through
+/// `UpdateLayeredWindow` and must never have `SetLayeredWindowAttributes`
+/// called on it (Windows then refuses per-pixel updates); the ghost is
+/// the other way round — a uniform alpha over a solid fill — and is also
+/// click-through and topmost.
+fn create(owner: WinId, ghost: bool) -> Option<HWND> {
     unsafe {
         let instance = GetModuleHandleW(None).ok()?;
         let mut ex = WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
-        if click_through {
-            ex |= WS_EX_TRANSPARENT;
-        }
-        if topmost {
-            ex |= WS_EX_TOPMOST;
+        if ghost {
+            ex |= WS_EX_TRANSPARENT | WS_EX_TOPMOST;
         }
         let hwnd = CreateWindowExW(
             ex,
@@ -272,25 +281,102 @@ fn create(owner: WinId, alpha: u8, click_through: bool, topmost: bool) -> Option
         )
         .ok()?;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, owner as isize);
-        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
+        if ghost {
+            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), GHOST_ALPHA, LWA_ALPHA);
+        }
         Some(hwnd)
     }
 }
 
-/// Put a target window over its rectangle without activating anything:
-/// immediately below `below` in z-order (or topmost, for the ghost),
-/// shown or hidden as asked, and wearing the ring region if it is a
-/// border (or losing a stale one if the style changed to tab). The
-/// z-order part is skipped when the target already sits directly below
-/// its window, so re-asserting it every tick costs one `GetWindow` and
-/// never churns the desktop's reorder events.
-fn place(hwnd: HWND, target: TapTarget, below: Option<HWND>, show: bool) {
-    let b = target.bounds();
+/// Blit `pixels` into a band window at `at` (virtual-desktop pixels):
+/// the one call that both sizes the window and gives it its per-pixel
+/// content. A 32-bit top-down DIB is filled from the buffer and handed
+/// to `UpdateLayeredWindow` with per-pixel source alpha; the DIB is
+/// released at once — Windows keeps its own copy. Returns whether
+/// Windows took the update; an empty band counts as taken.
+fn blit(hwnd: HWND, at: Rect, pixels: &Pixels) -> bool {
+    if pixels.w == 0 || pixels.h == 0 {
+        return true;
+    }
+    let mut taken = false;
+    unsafe {
+        let screen = GetDC(None);
+        let mem = CreateCompatibleDC(Some(screen));
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: pixels.w as i32,
+                biHeight: -(pixels.h as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits: *mut c_void = std::ptr::null_mut();
+        if let Ok(bitmap) = CreateDIBSection(Some(screen), &info, DIB_RGB_COLORS, &mut bits, None, 0)
+        {
+            if !bits.is_null() {
+                std::ptr::copy_nonoverlapping(
+                    pixels.data.as_ptr(),
+                    bits as *mut u32,
+                    pixels.w * pixels.h,
+                );
+                let old = SelectObject(mem, bitmap.into());
+                let dst = POINT { x: at.x.round() as i32, y: at.y.round() as i32 };
+                let size = SIZE { cx: pixels.w as i32, cy: pixels.h as i32 };
+                let src = POINT { x: 0, y: 0 };
+                let blend = BLENDFUNCTION {
+                    BlendOp: AC_SRC_OVER as u8,
+                    BlendFlags: 0,
+                    SourceConstantAlpha: 255,
+                    AlphaFormat: AC_SRC_ALPHA as u8,
+                };
+                taken = UpdateLayeredWindow(
+                    hwnd,
+                    Some(screen),
+                    Some(&dst as *const POINT),
+                    Some(&size as *const SIZE),
+                    Some(mem),
+                    Some(&src as *const POINT),
+                    COLORREF(0),
+                    Some(&blend as *const BLENDFUNCTION),
+                    ULW_ALPHA,
+                )
+                .is_ok();
+                SelectObject(mem, old);
+            }
+            let _ = DeleteObject(bitmap.into());
+        }
+        let _ = DeleteDC(mem);
+        ReleaseDC(None, screen);
+    }
+    taken
+}
+
+/// Give up on per-pixel painting for a band: a uniform alpha over the
+/// amber fill `tab_proc` draws, i.e. the 2026-09-03 tab. Once
+/// `SetLayeredWindowAttributes` has been called the window cannot go
+/// back to `UpdateLayeredWindow`, so this is one-way, and the band is
+/// remembered as solid so it is never blitted again.
+fn fall_back_to_solid(hwnd: HWND) {
+    unsafe {
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), FALLBACK_ALPHA, LWA_ALPHA);
+    }
+}
+
+/// Put a window over `rect` without activating anything: immediately
+/// below `below` in z-order (or topmost, for the ghost), shown or hidden
+/// as asked. The z-order part is skipped when the window already sits
+/// directly below its owner, so re-asserting it every tick costs one
+/// `GetWindow` and never churns the desktop's reorder events.
+fn place(hwnd: HWND, rect: Rect, below: Option<HWND>, show: bool) {
     let (x, y, w, h) = (
-        b.x.round() as i32,
-        b.y.round() as i32,
-        b.w.round() as i32,
-        b.h.round() as i32,
+        rect.x.round() as i32,
+        rect.y.round() as i32,
+        rect.w.round() as i32,
+        rect.h.round() as i32,
     );
     unsafe {
         let mut flags = SWP_NOACTIVATE | if show { SWP_SHOWWINDOW } else { SWP_HIDEWINDOW };
@@ -304,36 +390,24 @@ fn place(hwnd: HWND, target: TapTarget, below: Option<HWND>, show: bool) {
             None => HWND_TOPMOST,
         };
         let _ = SetWindowPos(hwnd, Some(insert_after), x, y, w, h, flags);
-        let region = match target {
-            TapTarget::Tab(_) => None,
-            TapTarget::Border { outer, inner } => {
-                // Window coordinates: the whole window minus the hole
-                // where the app shows through.
-                let ring = CreateRectRgn(0, 0, w, h);
-                let hole = CreateRectRgn(
-                    (inner.x - outer.x).round() as i32,
-                    (inner.y - outer.y).round() as i32,
-                    (inner.right() - outer.x).round() as i32,
-                    (inner.bottom() - outer.y).round() as i32,
-                );
-                CombineRgn(Some(ring), Some(ring), Some(hole), RGN_DIFF);
-                let _ = DeleteObject(hole.into());
-                Some(ring)
-            }
-        };
-        // The system owns the region from here on; never delete it.
-        SetWindowRgn(hwnd, region, true);
     }
 }
 
-/// Take a target off the screen without destroying it.
+/// Take a window off the screen without destroying it.
 fn hide(hwnd: HWND) {
     unsafe {
         let _ = ShowWindow(hwnd, SW_HIDE);
     }
 }
 
-/// True while a managed window can carry a visible target: it still
+/// Destroy a window for good.
+fn destroy(hwnd: HWND) {
+    unsafe {
+        let _ = DestroyWindow(hwnd);
+    }
+}
+
+/// True while a managed window can carry a visible frame: it still
 /// exists, is shown, is not minimized, and touches the managed monitor
 /// (REQUESTS-2026-09-04 §4: minimized, hidden or off-monitor → no frame).
 fn owner_on_screen(owner: HWND, monitor: Rect) -> bool {
@@ -343,18 +417,23 @@ fn owner_on_screen(owner: HWND, monitor: Rect) -> bool {
         && win::intersects(win::window_rect(owner), monitor)
 }
 
-/// Destroy a target window for good.
-fn destroy(hwnd: HWND) {
-    unsafe {
-        let _ = DestroyWindow(hwnd);
-    }
+/// The four band windows of one frame and what they last painted.
+struct FrameWin {
+    /// Top, bottom, left, right — the order `Frame::bands` uses.
+    bands: [HWND; 4],
+    /// The geometry and active state the pixels on screen came from;
+    /// nothing is repainted while these hold.
+    painted: Option<(Frame, bool)>,
+    /// Bands Windows refused to paint per-pixel, now solid amber; they
+    /// are positioned but never blitted again.
+    solid: [bool; 4],
 }
 
-/// The on-screen targets: one window per managed window, plus the
+/// The on-screen frames: four band windows per managed window, plus the
 /// ghost that marks the drop slot during a drag.
 pub struct Tabs {
-    /// Live target windows by the managed window they belong to.
-    tabs: HashMap<WinId, HWND>,
+    /// Live frames by the managed window they belong to.
+    frames: HashMap<WinId, FrameWin>,
     /// The drop highlight, created once and hidden between drags.
     ghost: Option<HWND>,
 }
@@ -363,59 +442,85 @@ impl Tabs {
     /// Register the window class and create the (hidden) ghost.
     pub fn new() -> Self {
         register_class();
-        Self {
-            tabs: HashMap::new(),
-            ghost: create(0, GHOST_ALPHA, true, true),
-        }
+        Self { frames: HashMap::new(), ghost: create(0, true) }
     }
 
-    /// Bring the target windows in line with `targets` — one per managed
-    /// window, in virtual-desktop pixels — creating, moving, reshaping
-    /// and destroying as needed, each directly below its own window in
-    /// z-order. With `visible` false every target hides (laptop mode, an
-    /// overlay holding the foreground, a fullscreen foreground); with it
-    /// true a target still hides while its own window is minimized,
-    /// hidden or off `monitor`.
-    pub fn sync(&mut self, targets: &[(WinId, TapTarget)], visible: bool, monitor: Rect) {
-        let wanted: HashSet<WinId> = targets.iter().map(|(id, _)| *id).collect();
-        let gone: Vec<WinId> = self
-            .tabs
-            .keys()
-            .filter(|id| !wanted.contains(id))
-            .copied()
-            .collect();
+    /// Bring the frames in line with `frames` — one per managed window,
+    /// in virtual-desktop pixels, with whether its window is the OS
+    /// foreground — creating, repainting, moving, reordering and
+    /// destroying as needed, every band directly below its own window.
+    /// With `visible` false every frame hides (laptop mode, an overlay
+    /// holding the foreground, a fullscreen foreground); with it true a
+    /// frame still hides while its own window is minimized, hidden or
+    /// off `monitor`.
+    pub fn sync(&mut self, frames: &[(WinId, Frame, bool)], visible: bool, monitor: Rect) {
+        let wanted: HashSet<WinId> = frames.iter().map(|(id, _, _)| *id).collect();
+        let gone: Vec<WinId> =
+            self.frames.keys().filter(|id| !wanted.contains(id)).copied().collect();
         for id in gone {
-            if let Some(hwnd) = self.tabs.remove(&id) {
-                destroy(hwnd);
+            if let Some(fw) = self.frames.remove(&id) {
+                for hwnd in fw.bands {
+                    destroy(hwnd);
+                }
             }
         }
-        for &(id, target) in targets {
-            let hwnd = match self.tabs.get(&id) {
-                Some(&hwnd) => hwnd,
-                None => match create(id, TAB_ALPHA, false, false) {
-                    Some(hwnd) => {
-                        self.tabs.insert(id, hwnd);
-                        hwnd
+        for (id, frame, active) in frames {
+            if !self.frames.contains_key(id) {
+                let mut bands = [HWND::default(); 4];
+                let mut ok = true;
+                for band in bands.iter_mut() {
+                    match create(*id, false) {
+                        Some(hwnd) => *band = hwnd,
+                        None => ok = false,
                     }
-                    None => continue,
-                },
+                }
+                if !ok {
+                    for hwnd in bands {
+                        if !hwnd.is_invalid() {
+                            destroy(hwnd);
+                        }
+                    }
+                    continue;
+                }
+                self.frames.insert(*id, FrameWin { bands, painted: None, solid: [false; 4] });
+            }
+            let Some(fw) = self.frames.get_mut(id) else {
+                continue;
             };
-            let owner = win::hwnd_of(id);
+            let owner = win::hwnd_of(*id);
             let show = visible && owner_on_screen(owner, monitor);
-            place(hwnd, target, Some(owner), show);
+            let repaint = fw
+                .painted
+                .as_ref()
+                .map_or(true, |(f, a)| f != frame || *a != *active);
+            let rects = frame.bands();
+            for k in 0..4 {
+                let hwnd = fw.bands[k];
+                if repaint && !fw.solid[k] {
+                    let pixels = paint::paint_band(frame, rects[k], *active);
+                    if !blit(hwnd, rects[k], &pixels) {
+                        fall_back_to_solid(hwnd);
+                        fw.solid[k] = true;
+                    }
+                }
+                place(hwnd, rects[k], Some(owner), show);
+            }
+            if repaint {
+                fw.painted = Some((frame.clone(), *active));
+            }
         }
     }
 
-    /// How many target windows exist right now.
+    /// How many frames exist right now.
     pub fn count(&self) -> usize {
-        self.tabs.len()
+        self.frames.len()
     }
 
     /// Show the drop highlight over `rect` (virtual-desktop pixels). The
     /// ghost is topmost so the slot lights up over whatever is there.
     pub fn show_ghost(&self, rect: Rect) {
         if let Some(ghost) = self.ghost {
-            place(ghost, TapTarget::Tab(rect), None, true);
+            place(ghost, rect, None, true);
         }
     }
 
@@ -429,8 +534,10 @@ impl Tabs {
     /// Destroy every window we made. Windows would die with the process
     /// anyway; this is for a clean quit.
     pub fn clear(&mut self) {
-        for (_, hwnd) in self.tabs.drain() {
-            destroy(hwnd);
+        for (_, fw) in self.frames.drain() {
+            for hwnd in fw.bands {
+                destroy(hwnd);
+            }
         }
         if let Some(ghost) = self.ghost.take() {
             destroy(ghost);

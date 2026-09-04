@@ -12,7 +12,8 @@
 //!    is on at all — `dwell_ms = 0` leaves the tabs as the only way);
 //! 5. advance in-flight animations (a snapshot flies; the window is
 //!    resized once, when it lands — §9);
-//! 6. put a tap target beside every managed window if anything changed.
+//! 6. put a frame behind every managed window if anything changed (four
+//!    band windows each, painted in core, blitted here).
 //!
 //! Everything policy-shaped lives in `focal-core`; this file only knows
 //! *how* to ask Windows, never *what* to do.
@@ -34,7 +35,7 @@ use focal_core::config::{self, Config, Screen};
 use focal_core::engine::{Command, Engine, Event, Source, WinId};
 use focal_core::geometry::Rect;
 use focal_core::layout::{self, SlotId};
-use focal_core::tab::TapTarget;
+use focal_core::tab::Frame;
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -384,20 +385,21 @@ impl Service {
         let cfg = self.engine.config();
         let (ox, oy) = self.origin;
         let staged = self.engine.focused();
-        let targets: Vec<(WinId, TapTarget)> = self
+        let active = self.engine.foreground();
+        let frames: Vec<(WinId, Frame, bool)> = self
             .engine
             .managed()
             .into_iter()
             .filter_map(|id| {
                 self.engine.placement(id).map(|rect| {
-                    let target = focal_core::tab::tap_target(cfg, rect, staged == Some(id));
-                    (id, target.offset(ox, oy))
+                    let frame = focal_core::tab::frame(cfg, rect, staged == Some(id));
+                    (id, frame.offset(ox, oy), active == Some(id))
                 })
             })
             .collect();
         let fullscreen = win::covers_monitor(unsafe { GetForegroundWindow() }, self.monitor);
         let visible = self.engine.is_active() && !self.engine.is_suspended() && !fullscreen;
-        self.tabs.sync(&targets, visible, self.monitor);
+        self.tabs.sync(&frames, visible, self.monitor);
         self.tabs_dirty = false;
     }
 
@@ -703,11 +705,10 @@ pub fn run(cfg: Config, config_path: PathBuf) -> windows::core::Result<()> {
     ));
     log::line("running — Ctrl+Alt+Space clears the stage, Ctrl+Alt+D forces desk mode");
     log::line(&format!(
-        "tabs: tap to promote, drag to move ({}, behind their window; the stage gets a slim ring); dwell {}",
-        match service.engine.config().tap_style {
-            config::TapStyle::Tab => "one tab per window, facing center",
-            config::TapStyle::Border => "a border around every window",
-        },
+        "frames: tap to promote, drag to move; behind their window, slim {:.2}\" x3 + thick {:.2}\" toward center, the stage a {:.2}\" ring; dwell {}",
+        service.engine.config().frame_in,
+        service.engine.config().tab_in,
+        service.engine.config().stage_in,
         if service.engine.config().dwell_enabled() {
             format!("{} ms, still promotes", service.engine.config().dwell_ms)
         } else {
