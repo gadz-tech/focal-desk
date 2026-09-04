@@ -101,6 +101,23 @@ pub fn home_priority() -> [SlotId; 12] {
     [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(SlotId)
 }
 
+/// The slots a name in a config `slots =` list stands for: one slot by
+/// name, or a group — `corners`, `sides`, `left`, `right`, `top`,
+/// `bottom` — in a fixed order (2026-09-04, REQUESTS §8: "terminals to
+/// the corners, browsers to the sides, mail to the top or bottom").
+pub fn slot_group(name: &str) -> Option<Vec<SlotId>> {
+    let names: &[&str] = match name.trim().to_lowercase().as_str() {
+        "corners" => &["corner-tl", "corner-tr", "corner-bl", "corner-br"],
+        "sides" => &["left-top", "left-bottom", "right-top", "right-bottom"],
+        "left" => &["left-top", "left-bottom"],
+        "right" => &["right-top", "right-bottom"],
+        "top" => &["top-1", "top-2"],
+        "bottom" => &["bottom-1", "bottom-2"],
+        _ => return slot_from_name(name).map(|s| vec![s]),
+    };
+    Some(names.iter().filter_map(|n| slot_from_name(n)).collect())
+}
+
 /// Window rect for a slot: region in pixels, inset by half the gutter.
 /// Because neighbouring regions share an edge, two adjacent windows end
 /// up exactly one gutter apart — the structural-gutter invariant.
@@ -171,6 +188,23 @@ mod tests {
             assert_eq!(slot_from_name(slot_name(s)), Some(s));
         }
         assert_eq!(slot_from_name("nonsense"), None);
+    }
+
+    #[test]
+    fn slot_groups_expand_in_order() {
+        let names = |g: &str| -> Vec<&str> {
+            slot_group(g).unwrap().into_iter().map(slot_name).collect()
+        };
+        assert_eq!(names("corners"), vec!["corner-tl", "corner-tr", "corner-bl", "corner-br"]);
+        assert_eq!(names("sides"), vec!["left-top", "left-bottom", "right-top", "right-bottom"]);
+        assert_eq!(names("Top"), vec!["top-1", "top-2"], "case-insensitive");
+        assert_eq!(names("bottom"), vec!["bottom-1", "bottom-2"]);
+        assert_eq!(names("left"), vec!["left-top", "left-bottom"]);
+        assert_eq!(names("right"), vec!["right-top", "right-bottom"]);
+        // A plain slot name passes through as a one-slot group.
+        assert_eq!(names("focal"), vec!["focal"]);
+        assert_eq!(names(" corner-br "), vec!["corner-br"]);
+        assert_eq!(slot_group("attic"), None);
     }
 
     #[test]

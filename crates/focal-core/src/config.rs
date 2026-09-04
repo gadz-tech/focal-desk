@@ -73,10 +73,13 @@ impl TapStyle {
 }
 
 /// What the adapter reports about a window when it appears.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct WindowMeta {
     pub process: String,
     pub title: String,
+    /// The window class name (`Chrome_WidgetWin_1`,
+    /// `CASCADIA_HOSTING_WINDOW_CLASS`, …), matchable since 2026-09-04.
+    pub class: String,
 }
 
 /// Matches windows to rules. Globs are case-insensitive, `*` wildcard.
@@ -84,15 +87,29 @@ pub struct WindowMeta {
 pub enum Matcher {
     Process(String),
     Title(String),
+    /// The window class name, as a glob.
+    Class(String),
+    /// A case-insensitive substring of the exe name, the class or the
+    /// title — the `match =` key (REQUESTS-2026-09-04 §8):
+    /// `match = household` finds the kiosk wherever it shows up.
+    Substring(String),
     Any,
 }
 
 impl Matcher {
-    /// True when this matcher's glob matches the relevant window field.
+    /// True when this matcher's glob matches the relevant window field
+    /// (any of the three, for a substring).
     pub fn matches(&self, meta: &WindowMeta) -> bool {
         match self {
             Matcher::Process(g) => glob_match(g, &meta.process),
             Matcher::Title(g) => glob_match(g, &meta.title),
+            Matcher::Class(g) => glob_match(g, &meta.class),
+            Matcher::Substring(s) => {
+                let g = format!("*{s}*");
+                glob_match(&g, &meta.process)
+                    || glob_match(&g, &meta.class)
+                    || glob_match(&g, &meta.title)
+            }
             Matcher::Any => true,
         }
     }
@@ -131,8 +148,15 @@ fn glob_match(pat: &str, text: &str) -> bool {
 #[derive(Clone, Debug)]
 pub struct AppRule {
     pub matcher: Matcher,
-    /// Preferred home slot; `None` means "first free by priority".
-    pub home: Option<SlotId>,
+    /// Home slots in order of preference: the first free one is taken
+    /// (`slots = corners`, `slots = top-1, top-2`; `home = X` is the
+    /// one-slot spelling). Empty means "first free, center-out"
+    /// (REQUESTS-2026-09-04 §8).
+    pub slots: Vec<SlotId>,
+    /// Claim the first preference even if it is occupied; the occupant
+    /// moves to its own next preference (or the fallback). A window the
+    /// user placed by hand is never displaced.
+    pub priority: bool,
     /// How this app sits on the focal stage when promoted.
     pub focal_fit: Option<Fit>,
 }
@@ -195,6 +219,10 @@ pub struct Config {
     /// overlays you are *doing something with* — screen capture, the
     /// task switcher — and a window sliding underneath ruins the shot.
     pub ignore: Vec<Matcher>,
+    /// Problems the parser stepped over: one line per `[app]` rule it
+    /// skipped, naming the line and the reason. The adapter logs them; a
+    /// typo in one rule never costs the others (2026-09-04 §8).
+    pub warnings: Vec<String>,
 }
 
 impl Default for Config {
@@ -219,6 +247,7 @@ impl Default for Config {
             apps: Vec::new(),
             wires: Vec::new(),
             ignore: default_ignores(),
+            warnings: Vec::new(),
         }
     }
 }
@@ -307,7 +336,10 @@ pub fn parse(text: &str) -> Result<Config, String> {
     /// Sections the parser can be inside of.
     enum Sec {
         Root,
-        App(AppRule),
+        /// An `[app]` in progress, and the first problem found in it. A
+        /// broken rule is skipped with a warning, never a parse failure
+        /// (REQUESTS-2026-09-04 §8): one typo must not cost every rule.
+        App(AppRule, Option<String>),
         Wire(Option<Matcher>, Option<Matcher>),
         Ignore,
     }
@@ -316,7 +348,10 @@ pub fn parse(text: &str) -> Result<Config, String> {
     fn flush(cfg: &mut Config, sec: Sec) -> Result<(), String> {
         match sec {
             Sec::Root => {}
-            Sec::App(rule) => cfg.apps.push(rule),
+            Sec::App(rule, None) => cfg.apps.push(rule),
+            Sec::App(_, Some(problem)) => {
+                cfg.warnings.push(format!("{problem} — [app] rule skipped"))
+            }
             Sec::Ignore => {}
             Sec::Wire(a, b) => {
                 let (a, b) = (
@@ -334,6 +369,52 @@ pub fn parse(text: &str) -> Result<Config, String> {
         v.trim().parse().map_err(|_| format!("{k}: bad number {v:?}"))
     }
 
+    /// Parse a `slots =` list: slot names and group names (`corners`,
+    /// `sides`, `left`, `right`, `top`, `bottom`), comma-separated, in
+    /// order of preference; duplicates are dropped.
+    fn slot_list(v: &str) -> Result<Vec<SlotId>, String> {
+        let mut out: Vec<SlotId> = Vec::new();
+        for name in v.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            let group = crate::layout::slot_group(name)
+                .ok_or_else(|| format!("unknown slot {name:?}"))?;
+            for s in group {
+                if !out.contains(&s) {
+                    out.push(s);
+                }
+            }
+        }
+        if out.is_empty() {
+            return Err("slots wants at least one slot or group name".into());
+        }
+        Ok(out)
+    }
+
+    /// Apply one `key = value` line inside an `[app]` section.
+    fn app_key(rule: &mut AppRule, k: &str, v: &str) -> Result<(), String> {
+        match k {
+            "process" => rule.matcher = Matcher::Process(v.into()),
+            "title" => rule.matcher = Matcher::Title(v.into()),
+            "class" => rule.matcher = Matcher::Class(v.into()),
+            "match" => rule.matcher = Matcher::Substring(v.into()),
+            "home" | "slots" => rule.slots = slot_list(v)?,
+            "priority" => {
+                rule.priority = match v.to_lowercase().as_str() {
+                    "true" | "yes" | "on" => true,
+                    "false" | "no" | "off" => false,
+                    other => return Err(format!("priority wants true or false, got {other:?}")),
+                }
+            }
+            "focal_fit" => {
+                let (w, h) = v
+                    .split_once('x')
+                    .ok_or_else(|| "focal_fit wants WxH, e.g. 0.55 x 1.0".to_string())?;
+                rule.focal_fit = Some(Fit { w: num(k, w)?, h: num(k, h)? });
+            }
+            other => return Err(format!("unknown key {other:?} in [app]")),
+        }
+        Ok(())
+    }
+
     let mut cfg = Config::default();
     let mut sec = Sec::Root;
     for (n, raw) in text.lines().enumerate() {
@@ -345,7 +426,15 @@ pub fn parse(text: &str) -> Result<Config, String> {
         if line.starts_with('[') {
             flush(&mut cfg, std::mem::replace(&mut sec, Sec::Root)).map_err(where_)?;
             sec = match line {
-                "[app]" => Sec::App(AppRule { matcher: Matcher::Any, home: None, focal_fit: None }),
+                "[app]" => Sec::App(
+                    AppRule {
+                        matcher: Matcher::Any,
+                        slots: Vec::new(),
+                        priority: false,
+                        focal_fit: None,
+                    },
+                    None,
+                ),
                 "[wire]" => Sec::Wire(None, None),
                 "[ignore]" => Sec::Ignore,
                 other => return Err(where_(format!("unknown section {other}"))),
@@ -356,6 +445,16 @@ pub fn parse(text: &str) -> Result<Config, String> {
             .split_once('=')
             .ok_or_else(|| where_(format!("expected key = value, got {line:?}")))?;
         let (k, v) = (k.trim(), v.trim());
+        if let Sec::App(rule, problem) = &mut sec {
+            // Inside a rule, a problem marks the rule broken and parsing
+            // goes on; the flush turns it into a warning.
+            if let Err(e) = app_key(rule, k, v) {
+                if problem.is_none() {
+                    *problem = Some(where_(e));
+                }
+            }
+            continue;
+        }
         match (&mut sec, k) {
             (Sec::Root, "gutter_in") => cfg.gutter_in = num(k, v).map_err(where_)?,
             (Sec::Root, "focal_frac") => cfg.focal_frac = num(k, v).map_err(where_)?,
@@ -373,23 +472,6 @@ pub fn parse(text: &str) -> Result<Config, String> {
                 cfg.screen_diagonal_in = num(k, v).map_err(where_)?
             }
             (Sec::Root, "force_active") => cfg.force_active = v == "true",
-            (Sec::App(rule), "process") => rule.matcher = Matcher::Process(v.into()),
-            (Sec::App(rule), "title") => rule.matcher = Matcher::Title(v.into()),
-            (Sec::App(rule), "home") => {
-                rule.home = Some(
-                    crate::layout::slot_from_name(v)
-                        .ok_or_else(|| where_(format!("unknown slot {v:?}")))?,
-                )
-            }
-            (Sec::App(rule), "focal_fit") => {
-                let (w, h) = v
-                    .split_once('x')
-                    .ok_or_else(|| where_("focal_fit wants WxH, e.g. 0.55 x 1.0".into()))?;
-                rule.focal_fit = Some(Fit {
-                    w: num(k, w).map_err(where_)?,
-                    h: num(k, h).map_err(where_)?,
-                });
-            }
             (Sec::Ignore, "process") => cfg.ignore.push(Matcher::Process(v.into())),
             (Sec::Ignore, "title") => cfg.ignore.push(Matcher::Title(v.into())),
             (Sec::Wire(a, _), "a_process") => *a = Some(Matcher::Process(v.into())),
@@ -440,6 +522,32 @@ home      = left-top
 title     = *Claude*
 home      = right-top
 
+# Assignable slots (2026-09-04): ordered preferences per app - the first
+# free one is taken. Groups: corners, sides, left, right, top, bottom, or
+# any slot name. `priority = true` claims the first preference even if it
+# is taken; the occupant moves to its own next preference. `match =` is a
+# substring of the exe, the class or the title. A window you dragged by
+# its tab keeps its slot against any rule until it closes. A rule with a
+# typo is logged and skipped; the rest of the file still loads.
+# Uncomment to use:
+#
+# [app]
+# match    = household          # the kiosk, wherever it shows up
+# slots    = top
+# priority = true
+#
+# [app]
+# process  = *windowsterminal*
+# slots    = corners
+#
+# [app]
+# process  = *chrome*           # browsers to the sides
+# slots    = sides
+#
+# [app]
+# process  = *olk*              # mail (new Outlook): top or bottom
+# slots    = top, bottom
+
 # Never manage these, and hold the whole layout still while one of them
 # is in front. Snipping Tool, the task switcher and the start menu are
 # already covered by the built-in list; entries here are added to it.
@@ -450,6 +558,12 @@ home      = right-top
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::slot_name;
+
+    /// A WindowMeta from just a process name and a title.
+    fn m(process: &str, title: &str) -> WindowMeta {
+        WindowMeta { process: process.into(), title: title.into(), class: String::new() }
+    }
 
     #[test]
     fn glob_basics() {
@@ -464,49 +578,102 @@ mod tests {
         let cfg = parse(EXAMPLE).expect("example config must parse");
         assert_eq!(cfg.gutter_in, 1.5);
         assert_eq!(cfg.dwell_ms, 0, "the example ships tab-only");
-        assert_eq!(cfg.apps.len(), 3);
+        assert_eq!(cfg.apps.len(), 3, "the assignable-slot examples ship commented out");
+        assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
         let term = &cfg.apps[0];
-        assert_eq!(term.home, crate::layout::slot_from_name("left-bottom"));
+        assert_eq!(term.slots, vec![crate::layout::slot_from_name("left-bottom").unwrap()]);
+        assert!(!term.priority);
         assert!((term.focal_fit.unwrap().w - 0.55).abs() < 1e-6);
-        assert!(term.matcher.matches(&WindowMeta {
-            process: "WindowsTerminal.exe".into(),
-            title: String::new(),
-        }));
+        assert!(term.matcher.matches(&m("WindowsTerminal.exe", "")));
     }
 
     #[test]
     fn config_errors_point_at_the_line() {
         let err = parse("gutter_in = 1.5\nnonsense_key = 3").unwrap_err();
         assert!(err.starts_with("line 2:"), "got {err}");
-        let err = parse("[app]\nhome = nowhere").unwrap_err();
-        assert!(err.contains("unknown slot"), "got {err}");
+        // Inside [app] a problem is a warning that names the line, and
+        // the rule is skipped rather than the whole file refused (§8).
+        let cfg = parse("[app]\nhome = nowhere").unwrap();
+        assert!(cfg.apps.is_empty());
+        assert_eq!(cfg.warnings.len(), 1);
+        assert!(cfg.warnings[0].starts_with("line 2:"), "got {}", cfg.warnings[0]);
+        assert!(cfg.warnings[0].contains("unknown slot"), "got {}", cfg.warnings[0]);
     }
 
     #[test]
     fn snipping_tool_is_ignored_out_of_the_box() {
         let cfg = Config::default();
-        assert!(cfg.is_ignored(&WindowMeta {
-            process: "SnippingTool.exe".into(),
-            title: "Snipping Tool".into(),
-        }));
-        assert!(!cfg.is_ignored(&WindowMeta {
-            process: "Code.exe".into(),
-            title: "editor".into(),
-        }));
+        assert!(cfg.is_ignored(&m("SnippingTool.exe", "Snipping Tool")));
+        assert!(!cfg.is_ignored(&m("Code.exe", "editor")));
     }
 
     #[test]
     fn ignore_section_adds_to_the_defaults() {
         let cfg = parse("[ignore]\nprocess = *obs64*").unwrap();
-        assert!(cfg.is_ignored(&WindowMeta {
-            process: "obs64.exe".into(),
-            title: String::new(),
-        }));
+        assert!(cfg.is_ignored(&m("obs64.exe", "")));
         // built-ins survive
-        assert!(cfg.is_ignored(&WindowMeta {
-            process: "SnippingTool.exe".into(),
-            title: String::new(),
+        assert!(cfg.is_ignored(&m("SnippingTool.exe", "")));
+    }
+
+    // ---- assignable slots (2026-09-04, REQUESTS §8) ----------------------
+
+    #[test]
+    fn assignable_slot_rules_parse() {
+        let cfg = parse(
+            "[app]\nmatch = household\nslots = top\npriority = true\n\
+             [app]\nprocess = *windowsterminal*\nslots = corners\n\
+             [app]\nclass = Chrome_WidgetWin_1\nslots = sides\n\
+             [app]\nprocess = *olk*\nslots = top, bottom\n\
+             [app]\ntitle = *Claude*\nhome = right-top",
+        )
+        .unwrap();
+        assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
+        assert_eq!(cfg.apps.len(), 5);
+        let names =
+            |i: usize| -> Vec<&str> { cfg.apps[i].slots.iter().map(|&s| slot_name(s)).collect() };
+        assert_eq!(names(0), vec!["top-1", "top-2"]);
+        assert!(cfg.apps[0].priority);
+        assert!(cfg.apps[0].matcher.matches(&m("msedge.exe", "Household — kiosk")));
+        assert!(cfg.apps[0].matcher.matches(&m("household.exe", "")));
+        assert!(!cfg.apps[0].matcher.matches(&m("code.exe", "editor")));
+        assert_eq!(names(1), vec!["corner-tl", "corner-tr", "corner-bl", "corner-br"]);
+        assert!(!cfg.apps[1].priority, "priority is off unless asked");
+        assert_eq!(names(2), vec!["left-top", "left-bottom", "right-top", "right-bottom"]);
+        assert!(cfg.apps[2].matcher.matches(&WindowMeta {
+            process: "chrome.exe".into(),
+            title: "x".into(),
+            class: "Chrome_WidgetWin_1".into(),
         }));
+        assert_eq!(names(3), vec!["top-1", "top-2", "bottom-1", "bottom-2"]);
+        assert_eq!(names(4), vec!["right-top"], "home = X is the one-slot spelling");
+    }
+
+    #[test]
+    fn a_bad_rule_is_logged_and_skipped() {
+        let cfg = parse(
+            "gutter_in = 2\n\
+             [app]\nprocess = *code*\nslots = left\n\
+             [app]\nprocess = *mail*\nslots = attic\npriority = maybe\n\
+             [app]\nprocess = *term*\nslots = corners\nfocal_fit = 0.55 x 1.0",
+        )
+        .unwrap();
+        assert_eq!(cfg.gutter_in, 2.0, "the root config still loads");
+        assert_eq!(cfg.apps.len(), 2, "the broken rule is dropped, its neighbours kept");
+        assert!(cfg
+            .apps
+            .iter()
+            .all(|r| !matches!(&r.matcher, Matcher::Process(p) if p == "*mail*")));
+        assert_eq!(cfg.warnings.len(), 1, "one warning per broken rule: {:?}", cfg.warnings);
+        let w = &cfg.warnings[0];
+        assert!(w.contains("line 7"), "the first problem names its line: {w}");
+        assert!(w.contains("unknown slot \"attic\""), "{w}");
+        assert!(w.contains("skipped"), "{w}");
+        // An unknown key inside [app] is the same kind of problem.
+        let cfg = parse("[app]\nprocess = a\nhome = focal\ncolour = red").unwrap();
+        assert!(cfg.apps.is_empty());
+        assert!(cfg.warnings[0].contains("unknown key \"colour\""), "{}", cfg.warnings[0]);
+        // Whereas a bad root key is still a refusal: nothing to fall back to.
+        assert!(parse("gutter = 3").is_err());
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! out; no OS types anywhere. This is the file to read to understand
 //! what focal-desk *does*.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::config::{Config, Fit, WindowMeta};
 use crate::geometry::Rect;
@@ -117,6 +117,14 @@ pub struct Engine {
     /// Set when the screen or config changed while frozen; the resume then
     /// re-asserts everyone once, because every rect went stale.
     retuned_while_frozen: bool,
+    /// Each managed window's slot preferences as of its adoption (its
+    /// rule's `slots`, or empty), consulted when a priority claim
+    /// displaces it (REQUESTS-2026-09-04 §8).
+    prefs: HashMap<WinId, Vec<SlotId>>,
+    /// Windows the user placed by hand (a tab drag to a slot). A rule —
+    /// including another window's priority claim — never moves these;
+    /// the hand wins until the window closes.
+    pinned: HashSet<WinId>,
 }
 
 impl Engine {
@@ -134,7 +142,14 @@ impl Engine {
             last_promotion: None,
             deferred: Vec::new(),
             retuned_while_frozen: false,
+            prefs: HashMap::new(),
+            pinned: HashSet::new(),
         }
+    }
+
+    /// True when the user put this window where it is by hand.
+    pub fn is_pinned(&self, id: WinId) -> bool {
+        self.pinned.contains(&id)
     }
 
     /// The single entry point.
@@ -325,9 +340,14 @@ impl Engine {
         }
     }
 
-    /// Adopt a new window: home = the first matching rule's preferred
-    /// slot if free, else the first free slot center-out. With no free
-    /// slot the window stays unmanaged (floats).
+    /// Adopt a new window (REQUESTS-2026-09-04 §8). Its home is the first
+    /// *free* slot in its rule's preference list; with `priority` it may
+    /// instead claim an occupied preference, and the occupant moves to
+    /// its own next preference (see [`Self::displace`]). A window the
+    /// user placed by hand is never displaced — the claimant takes its
+    /// next claimable preference or the fallback. No rule, or no free
+    /// preference: first free slot center-out, as always. With no free
+    /// slot at all the window stays unmanaged (floats).
     fn on_opened(&mut self, id: WinId, meta: WindowMeta) -> Vec<Command> {
         // Capture overlays and shell surfaces are left entirely alone.
         if self.cfg.is_ignored(&meta) {
@@ -335,15 +355,31 @@ impl Engine {
         }
         let rule = self.cfg.apps.iter().find(|r| r.matcher.matches(&meta));
         let fit = rule.and_then(|r| r.focal_fit);
-        let preferred = rule.and_then(|r| r.home);
-        // Preferred slot if free, else first free slot center-out.
-        let slot = preferred
-            .filter(|s| !self.occupants.contains_key(s))
-            .or_else(|| {
-                layout::home_priority()
-                    .into_iter()
-                    .find(|s| !self.occupants.contains_key(s))
+        let prefs: Vec<SlotId> = rule.map(|r| r.slots.clone()).unwrap_or_default();
+        let priority = rule.map(|r| r.priority).unwrap_or(false);
+
+        let mut cmds = Vec::new();
+        let mut slot = prefs.iter().copied().find(|s| !self.occupants.contains_key(s));
+        if slot.is_none() && priority {
+            // Claim the first preference whose occupant did not get there
+            // by hand.
+            let claim = prefs.iter().find_map(|&s| {
+                self.occupants
+                    .get(&s)
+                    .copied()
+                    .filter(|o| !self.pinned.contains(o))
+                    .map(|o| (s, o))
             });
+            if let Some((claimed, occupant)) = claim {
+                cmds.extend(self.displace(occupant, claimed));
+                slot = Some(claimed);
+            }
+        }
+        let slot = slot.or_else(|| {
+            layout::home_priority()
+                .into_iter()
+                .find(|s| !self.occupants.contains_key(s))
+        });
         let Some(slot) = slot else {
             // Thirteenth window: no home exists. Current policy is to
             // leave it floating. (To change the policy, change only
@@ -352,19 +388,59 @@ impl Engine {
         };
         self.homes.insert(id, slot);
         self.fits.insert(id, fit);
+        self.prefs.insert(id, prefs);
         self.occupants.insert(slot, id);
         if self.active && !self.suspended {
-            vec![Command::Place {
+            cmds.push(Command::Place {
                 win: id,
                 to: layout::window_rect(&self.cfg, slot),
                 animate: true,
-            }]
-        } else {
-            if self.active {
-                // Adopted under an overlay: placed when it lifts.
-                self.deferred.push(id);
+            });
+        } else if self.active {
+            // Adopted under an overlay: placed when it lifts.
+            self.deferred.push(id);
+        }
+        cmds
+    }
+
+    /// Move `occupant` out of `slot`, which a priority rule is claiming:
+    /// to its own next free preference, else the first free slot
+    /// center-out; with nothing free anywhere it is released and floats
+    /// — the 13th-window policy, applied to the loser of a claim. An
+    /// occupant on the stage keeps the stage and only inherits the new
+    /// home, exactly as in a tab-drag swap.
+    fn displace(&mut self, occupant: WinId, slot: SlotId) -> Vec<Command> {
+        self.occupants.remove(&slot);
+        let own: Vec<SlotId> = self.prefs.get(&occupant).cloned().unwrap_or_default();
+        let next = own
+            .iter()
+            .copied()
+            .chain(layout::home_priority())
+            .find(|s| *s != slot && !self.occupants.contains_key(s));
+        match next {
+            Some(next) => {
+                self.homes.insert(occupant, next);
+                self.occupants.insert(next, occupant);
+                if self.focused == Some(occupant) || !self.active {
+                    Vec::new()
+                } else if self.suspended {
+                    self.deferred.push(occupant);
+                    Vec::new()
+                } else {
+                    vec![self.fly_home(occupant, next)]
+                }
             }
-            Vec::new()
+            None => {
+                self.homes.remove(&occupant);
+                self.fits.remove(&occupant);
+                self.prefs.remove(&occupant);
+                self.pinned.remove(&occupant);
+                self.deferred.retain(|&d| d != occupant);
+                if self.focused == Some(occupant) {
+                    self.focused = None;
+                }
+                vec![Command::Release(occupant)]
+            }
         }
     }
 
@@ -459,6 +535,9 @@ impl Engine {
         }
         self.homes.insert(id, slot);
         self.occupants.insert(slot, id);
+        // The hand wins over every rule for this window until it closes
+        // (§8); the bystander in a swap did not ask and is not pinned.
+        self.pinned.insert(id);
         if was_focused {
             self.focused = None;
         }
@@ -501,6 +580,8 @@ impl Engine {
             self.occupants.remove(&slot);
         }
         self.fits.remove(&id);
+        self.prefs.remove(&id);
+        self.pinned.remove(&id);
         self.deferred.retain(|&d| d != id);
         if self.focused == Some(id) {
             self.focused = None;
@@ -519,7 +600,7 @@ mod tests {
 
     /// Shorthand: a WindowMeta with just a process name.
     fn meta(p: &str) -> WindowMeta {
-        WindowMeta { process: p.into(), title: String::new() }
+        WindowMeta { process: p.into(), title: String::new(), class: String::new() }
     }
 
     /// An engine whose config gives terminals a 0.55-wide focal fit.
@@ -527,7 +608,8 @@ mod tests {
         let mut cfg = Config::default();
         cfg.apps = vec![AppRule {
             matcher: Matcher::Process("*terminal*".into()),
-            home: None,
+            slots: Vec::new(),
+            priority: false,
             focal_fit: Some(Fit { w: 0.55, h: 1.0 }),
         }];
         (Engine::new(cfg.clone()), cfg)
@@ -982,6 +1064,155 @@ mod tests {
             to: layout::window_rect(e.config(), home1),
             animate: false
         }));
+    }
+
+    // ---- assignable slots (2026-09-04, REQUESTS §8) ----------------------
+
+    /// A rule: `matcher` → ordered `slots` by name, with or without priority.
+    fn rule(matcher: Matcher, slots: &[&str], priority: bool) -> AppRule {
+        AppRule {
+            matcher,
+            slots: slots.iter().map(|s| slot(s)).collect(),
+            priority,
+            focal_fit: None,
+        }
+    }
+
+    /// The slot named in a config file, unwrapped for the tests.
+    fn slot(name: &str) -> SlotId {
+        layout::slot_from_name(name).unwrap()
+    }
+
+    /// A tab-only engine in desk mode running these rules.
+    fn engine_with_rules(rules: Vec<AppRule>) -> (Engine, Config) {
+        let mut cfg = Config::default();
+        cfg.dwell_ms = 0;
+        cfg.apps = rules;
+        let mut e = Engine::new(cfg.clone());
+        e.handle(Event::DeskMode(true));
+        (e, cfg)
+    }
+
+    #[test]
+    fn a_rule_gives_the_first_free_preferred_slot() {
+        let corners = ["corner-tl", "corner-tr", "corner-bl", "corner-br"];
+        let (mut e, _) =
+            engine_with_rules(vec![rule(Matcher::Process("*terminal*".into()), &corners, false)]);
+        e.handle(Event::Opened(1, meta("WindowsTerminal.exe")));
+        e.handle(Event::Opened(2, meta("WindowsTerminal.exe")));
+        assert_eq!(e.home_of(1), Some(slot("corner-tl")));
+        assert_eq!(e.home_of(2), Some(slot("corner-tr")));
+        // A stranger sitting in a preferred slot is skipped over, not moved.
+        e.handle(Event::Opened(3, meta("a.exe")));
+        assert_eq!(e.home_of(3), Some(slot("left-top")), "no rule: center-out");
+        e.handle(Event::MoveTo(3, slot("corner-bl")));
+        e.handle(Event::Opened(4, meta("WindowsTerminal.exe")));
+        assert_eq!(e.home_of(4), Some(slot("corner-br")));
+        assert_eq!(e.home_of(3), Some(slot("corner-bl")));
+        // Every preference taken: today's fallback, first free center-out.
+        e.handle(Event::Opened(5, meta("WindowsTerminal.exe")));
+        assert_eq!(e.home_of(5), Some(slot("left-top")));
+    }
+
+    #[test]
+    fn a_priority_claim_moves_the_occupant_to_its_next_preference() {
+        let (mut e, cfg) = engine_with_rules(vec![
+            rule(Matcher::Substring("household".into()), &["top-1"], true),
+            rule(Matcher::Process("*olk*".into()), &["top-1", "top-2", "bottom-1"], false),
+        ]);
+        e.handle(Event::Opened(1, meta("olk.exe")));
+        assert_eq!(e.home_of(1), Some(slot("top-1")));
+        let kiosk = WindowMeta {
+            process: "msedge.exe".into(),
+            title: "Household — kiosk".into(),
+            class: String::new(),
+        };
+        let cmds = e.handle(Event::Opened(2, kiosk));
+        assert_eq!(e.home_of(2), Some(slot("top-1")), "the priority window took the slot");
+        assert_eq!(e.home_of(1), Some(slot("top-2")), "mail moved to its own next preference");
+        assert_eq!(cmds, vec![at_home(&cfg, 1, slot("top-2")), at_home(&cfg, 2, slot("top-1"))]);
+        assert_eq!(e.occupant(slot("top-1")), Some(2));
+        assert_eq!(e.occupant(slot("top-2")), Some(1));
+        // Without priority the same rule would simply have taken top-2.
+        let (mut e, _) = engine_with_rules(vec![
+            rule(Matcher::Substring("household".into()), &["top-1", "top-2"], false),
+            rule(Matcher::Process("*olk*".into()), &["top-1"], false),
+        ]);
+        e.handle(Event::Opened(1, meta("olk.exe")));
+        e.handle(Event::Opened(2, meta("household.exe")));
+        assert_eq!(e.home_of(1), Some(slot("top-1")));
+        assert_eq!(e.home_of(2), Some(slot("top-2")));
+        // An occupant with no rule of its own falls back center-out.
+        let (mut e, _) = engine_with_rules(vec![rule(
+            Matcher::Substring("household".into()),
+            &["left-top"],
+            true,
+        )]);
+        e.handle(Event::Opened(1, meta("a.exe")));
+        e.handle(Event::Opened(2, meta("household.exe")));
+        assert_eq!(e.home_of(2), Some(slot("left-top")));
+        assert_eq!(e.home_of(1), Some(slot("left-bottom")));
+    }
+
+    #[test]
+    fn a_hand_move_beats_a_rule_until_the_window_closes() {
+        let (mut e, cfg) = engine_with_rules(vec![
+            rule(Matcher::Substring("household".into()), &["top-2"], true),
+            rule(Matcher::Process("*olk*".into()), &["top-1", "top-2"], false),
+        ]);
+        e.handle(Event::Opened(1, meta("olk.exe")));
+        e.handle(Event::MoveTo(1, slot("top-2")));
+        assert_eq!(e.home_of(1), Some(slot("top-2")));
+        assert!(e.is_pinned(1));
+        // A later priority claim cannot displace a hand-placed window…
+        e.handle(Event::Opened(2, meta("household.exe")));
+        assert_eq!(e.home_of(1), Some(slot("top-2")), "the hand placement stands");
+        assert_eq!(e.home_of(2), Some(slot("left-top")), "the claimant takes the fallback");
+        // …and a later retune re-asserts the hand placement, not the rule's.
+        let cmds = e.handle(Event::Reconfigured(cfg.clone()));
+        assert!(cmds.contains(&Command::Place {
+            win: 1,
+            to: layout::window_rect(&cfg, slot("top-2")),
+            animate: false
+        }));
+        // Once it closes, the slot is a rule's to take again.
+        e.handle(Event::Closed(1));
+        assert!(!e.is_pinned(1));
+        e.handle(Event::Opened(3, meta("olk.exe")));
+        assert_eq!(e.home_of(3), Some(slot("top-1")));
+        e.handle(Event::Opened(4, meta("household.exe")));
+        assert_eq!(e.home_of(4), Some(slot("top-2")));
+    }
+
+    #[test]
+    fn no_rule_means_todays_placement() {
+        let (mut e, _) = engine_with_rules(vec![rule(
+            Matcher::Process("*terminal*".into()),
+            &["corner-tl"],
+            true,
+        )]);
+        e.handle(Event::Opened(1, meta("a.exe")));
+        e.handle(Event::Opened(2, meta("b.exe")));
+        assert_eq!(e.home_of(1), Some(SlotId(1)), "first free, center-out");
+        assert_eq!(e.home_of(2), Some(SlotId(2)));
+        assert!(!e.is_pinned(1) && !e.is_pinned(2));
+    }
+
+    #[test]
+    fn a_claim_with_nothing_free_floats_the_loser() {
+        let (mut e, _) = engine_with_rules(vec![rule(
+            Matcher::Substring("household".into()),
+            &["left-top"],
+            true,
+        )]);
+        for id in 1..=12u64 {
+            e.handle(Event::Opened(id, meta("app.exe")));
+        }
+        let cmds = e.handle(Event::Opened(13, meta("household.exe")));
+        assert_eq!(e.home_of(13), Some(slot("left-top")));
+        assert_eq!(e.home_of(1), None, "the displaced window has nowhere to go");
+        assert!(cmds.contains(&Command::Release(1)));
+        assert!(matches!(cmds[..], [Command::Release(1), Command::Place { win: 13, .. }]));
     }
 
     #[test]

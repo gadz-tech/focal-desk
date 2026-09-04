@@ -48,6 +48,9 @@ fn load_config() -> Config {
         Ok(text) => match config::parse(&text) {
             Ok(cfg) => {
                 say(&format!("config: {}", path.display()));
+                for warning in &cfg.warnings {
+                    say(&format!("config warning: {warning}"));
+                }
                 cfg
             }
             Err(err) => {
@@ -94,6 +97,7 @@ fn main() {
                 focal_core::config::WindowMeta {
                     process: "Code.exe".into(),
                     title: "editor".into(),
+                    class: String::new(),
                 },
             ),
         ),
@@ -104,6 +108,7 @@ fn main() {
                 focal_core::config::WindowMeta {
                     process: "WindowsTerminal.exe".into(),
                     title: "wt".into(),
+                    class: String::new(),
                 },
             ),
         ),

@@ -315,6 +315,11 @@ impl Service {
         };
         match config::parse(&text) {
             Ok(mut cfg) => {
+                // A rule the parser stepped over is worth a line each: the
+                // rest of the file is live, that rule is not (§8).
+                for warning in &cfg.warnings {
+                    log::line(&format!("config warning: {warning}"));
+                }
                 // The file says how big the panel is; the panel says how
                 // many pixels it has. The gutter needs both, so re-derive
                 // the screen rather than trusting the parsed default.

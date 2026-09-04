@@ -222,11 +222,12 @@ pub fn process_name(hwnd: HWND) -> String {
     }
 }
 
-/// Process name plus title, as the engine's matchers expect them.
+/// Process name, title and class, as the engine's matchers expect them.
 pub fn window_meta(hwnd: HWND) -> WindowMeta {
     WindowMeta {
         process: process_name(hwnd),
         title: window_title(hwnd),
+        class: window_class(hwnd),
     }
 }
 
