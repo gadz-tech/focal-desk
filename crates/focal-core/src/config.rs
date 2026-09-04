@@ -174,6 +174,14 @@ pub struct Config {
     pub tab_in: f32,
     /// Length of the tab along its edge, in inches (clamped to the edge).
     pub tab_length_in: f32,
+    /// Width of the slim sides of a window's frame, in inches — the
+    /// three sides that do not face the screen center (2026-09-04,
+    /// REQUESTS §3). Clamped to half the gutter like `tab_in`.
+    pub frame_in: f32,
+    /// Width of the stage's frame, in inches: slim all round, no thick
+    /// side, "just thick enough for the landing holes" (REQUESTS
+    /// 2026-09-04 §3 rev 4, §6). Clamped to half the gutter.
+    pub stage_in: f32,
     /// Physical diagonal of the desk panel, used to convert the
     /// inch-based gutter into pixels once the mode is known.
     pub screen_diagonal_in: f32,
@@ -192,7 +200,8 @@ pub struct Config {
 impl Default for Config {
     /// The setup this project is built around: 65" 8K, 1.5" gutter,
     /// 56% focal column, 22% bands, dwell off (tab-only, since the
-    /// 2026-09-03 live run), a 0.75" × 5" tab.
+    /// 2026-09-03 live run), a 0.75" × 5" tab, 0.15" slim frame sides
+    /// and a 0.35" stage ring.
     fn default() -> Self {
         Self {
             screen: Screen::desk_65_8k(),
@@ -203,6 +212,8 @@ impl Default for Config {
             tap_style: TapStyle::Tab,
             tab_in: 0.75,
             tab_length_in: 5.0,
+            frame_in: 0.15,
+            stage_in: 0.35,
             screen_diagonal_in: 65.0,
             force_active: false,
             apps: Vec::new(),
@@ -261,6 +272,17 @@ impl Config {
     /// Tab length in pixels (before clamping to the edge it sits on).
     pub fn tab_length_px(&self) -> f32 {
         self.tab_length_in * self.screen.px_per_inch()
+    }
+
+    /// Slim frame width in pixels, clamped to half the gutter so a frame
+    /// stays in its own window's half of the channel.
+    pub fn frame_px(&self) -> f32 {
+        (self.frame_in * self.screen.px_per_inch()).min(self.gutter_px() / 2.0)
+    }
+
+    /// The stage frame's width in pixels, clamped to half the gutter.
+    pub fn stage_px(&self) -> f32 {
+        (self.stage_in * self.screen.px_per_inch()).min(self.gutter_px() / 2.0)
     }
 }
 
@@ -345,6 +367,8 @@ pub fn parse(text: &str) -> Result<Config, String> {
             }
             (Sec::Root, "tab_in") => cfg.tab_in = num(k, v).map_err(where_)?,
             (Sec::Root, "tab_length_in") => cfg.tab_length_in = num(k, v).map_err(where_)?,
+            (Sec::Root, "frame_in") => cfg.frame_in = num(k, v).map_err(where_)?,
+            (Sec::Root, "stage_in") => cfg.stage_in = num(k, v).map_err(where_)?,
             (Sec::Root, "screen_diagonal_in") => {
                 cfg.screen_diagonal_in = num(k, v).map_err(where_)?
             }
@@ -394,6 +418,8 @@ tap_style          = tab    # tab = one tab facing screen center; border = all
                             # the way around. Tap it to promote, drag it to move.
 tab_in             = 0.75   # tab depth / border width, inches (max: half the gutter)
 tab_length_in      = 5      # tab length along its edge, inches
+frame_in           = 0.15   # the slim sides of a window's frame, inches
+stage_in           = 0.35   # the stage's frame: slim all round, no tab, inches
 screen_diagonal_in = 65     # physical size of the desk panel
 force_active       = false  # true = manage windows even without the desk display
 
@@ -525,6 +551,24 @@ mod tests {
         assert!(err.contains("tab or border"), "got {err}");
         // The example config spells out every knob, so it must carry them.
         assert_eq!(parse(EXAMPLE).unwrap().tap_style, TapStyle::Tab);
+    }
+
+    #[test]
+    fn frame_widths_parse_and_clamp() {
+        let cfg = parse("frame_in = 0.2\nstage_in = 0.5").unwrap();
+        assert!((cfg.frame_in - 0.2).abs() < 1e-6);
+        assert!((cfg.stage_in - 0.5).abs() < 1e-6);
+        let ppi = cfg.screen.px_per_inch();
+        assert!((cfg.frame_px() - 0.2 * ppi).abs() < 1e-3);
+        assert!((cfg.stage_px() - 0.5 * ppi).abs() < 1e-3);
+        // Both stay in the window's own half of the gutter.
+        let wide = parse("frame_in = 3\nstage_in = 4").unwrap();
+        assert!((wide.frame_px() - wide.gutter_px() / 2.0).abs() < 1e-3, "frame clamped");
+        assert!((wide.stage_px() - wide.gutter_px() / 2.0).abs() < 1e-3, "stage clamped");
+        // The example carries both knobs.
+        let ex = parse(EXAMPLE).unwrap();
+        assert!((ex.frame_in - 0.15).abs() < 1e-6);
+        assert!((ex.stage_in - 0.35).abs() < 1e-6);
     }
 
     #[test]

@@ -18,8 +18,17 @@
 //! - `WS_EX_TOOLWINDOW` — no taskbar button, and `win::is_manageable`
 //!   rejects it on sight (it has no title either), so the rescan never
 //!   offers our own tabs to the engine;
-//! - `WS_EX_TOPMOST` — above the window it belongs to. Targets only
-//!   ever sit in the gutters, which no managed window covers.
+//! - **no `WS_EX_TOPMOST`** (2026-09-04, REQUESTS §4): a target sits
+//!   immediately *below* the window it belongs to — `SetWindowPos(target,
+//!   hwndInsertAfter = window)`, re-asserted whenever the foreground
+//!   changes, on minimize/restore, and on every rescan tick — so the
+//!   window covers the target's inner region and the visible part is the
+//!   ring outside. A target can never be above a window that is above
+//!   its own window; a fullscreen foreground hides them all (the adapter
+//!   decides that); a minimized, hidden or off-monitor window hides its
+//!   own. Until then targets were topmost, and stayed over a fullscreen
+//!   YouTube. The drop ghost is the one topmost window left here: it
+//!   exists only during a drag and the mouse goes straight through it.
 //!
 //! The border variant is the same window wearing a ring-shaped region
 //! (`SetWindowRgn`): the interior is not part of the window at all, so
@@ -54,13 +63,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
     GetSystemMetrics, GetWindowLongPtrW, LoadCursorW, RegisterClassW,
     SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_USERDATA,
-    HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MA_NOACTIVATE, SM_SWAPBUTTON, SWP_NOACTIVATE,
-    SWP_SHOWWINDOW, SW_HIDE, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WNDCLASSW,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-    WS_POPUP,
+    HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MA_NOACTIVATE, SM_SWAPBUTTON, SWP_HIDEWINDOW,
+    SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, WM_ERASEBKGND, WM_LBUTTONDOWN,
+    WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use crate::adapter::Note;
+use crate::win;
 
 /// The one window class every target shares.
 const CLASS: PCWSTR = w!("focal_desk_tab");
@@ -231,16 +241,20 @@ fn register_class() {
     }
 }
 
-/// Make one target window: a layered, non-activating, topmost popup
-/// with a uniform alpha. `owner` goes in the user data so the procedure
-/// knows whose tab was pressed. The ghost is also `WS_EX_TRANSPARENT`:
-/// the mouse goes straight through it while it marks the drop slot.
-fn create(owner: WinId, alpha: u8, click_through: bool) -> Option<HWND> {
+/// Make one target window: a layered, non-activating popup with a
+/// uniform alpha. `owner` goes in the user data so the procedure knows
+/// whose tab was pressed. A target is never topmost (§4); the ghost is,
+/// and is also `WS_EX_TRANSPARENT`: the mouse goes straight through it
+/// while it marks the drop slot.
+fn create(owner: WinId, alpha: u8, click_through: bool, topmost: bool) -> Option<HWND> {
     unsafe {
         let instance = GetModuleHandleW(None).ok()?;
-        let mut ex = WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
+        let mut ex = WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
         if click_through {
             ex |= WS_EX_TRANSPARENT;
+        }
+        if topmost {
+            ex |= WS_EX_TOPMOST;
         }
         let hwnd = CreateWindowExW(
             ex,
@@ -263,10 +277,14 @@ fn create(owner: WinId, alpha: u8, click_through: bool) -> Option<HWND> {
     }
 }
 
-/// Put a target window over its rectangle, topmost and without
-/// activating anything, and give it the ring region if it is a border
-/// (or take a stale ring away if the style changed to tab).
-fn place(hwnd: HWND, target: TapTarget) {
+/// Put a target window over its rectangle without activating anything:
+/// immediately below `below` in z-order (or topmost, for the ghost),
+/// shown or hidden as asked, and wearing the ring region if it is a
+/// border (or losing a stale one if the style changed to tab). The
+/// z-order part is skipped when the target already sits directly below
+/// its window, so re-asserting it every tick costs one `GetWindow` and
+/// never churns the desktop's reorder events.
+fn place(hwnd: HWND, target: TapTarget, below: Option<HWND>, show: bool) {
     let b = target.bounds();
     let (x, y, w, h) = (
         b.x.round() as i32,
@@ -275,15 +293,17 @@ fn place(hwnd: HWND, target: TapTarget) {
         b.h.round() as i32,
     );
     unsafe {
-        let _ = SetWindowPos(
-            hwnd,
-            Some(HWND_TOPMOST),
-            x,
-            y,
-            w,
-            h,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW,
-        );
+        let mut flags = SWP_NOACTIVATE | if show { SWP_SHOWWINDOW } else { SWP_HIDEWINDOW };
+        let insert_after = match below {
+            Some(owner) => {
+                if win::next_below(owner) == Some(hwnd) {
+                    flags |= SWP_NOZORDER;
+                }
+                owner
+            }
+            None => HWND_TOPMOST,
+        };
+        let _ = SetWindowPos(hwnd, Some(insert_after), x, y, w, h, flags);
         let region = match target {
             TapTarget::Tab(_) => None,
             TapTarget::Border { outer, inner } => {
@@ -313,6 +333,16 @@ fn hide(hwnd: HWND) {
     }
 }
 
+/// True while a managed window can carry a visible target: it still
+/// exists, is shown, is not minimized, and touches the managed monitor
+/// (REQUESTS-2026-09-04 §4: minimized, hidden or off-monitor → no frame).
+fn owner_on_screen(owner: HWND, monitor: Rect) -> bool {
+    win::is_window(owner)
+        && win::is_visible(owner)
+        && !win::is_iconic(owner)
+        && win::intersects(win::window_rect(owner), monitor)
+}
+
 /// Destroy a target window for good.
 fn destroy(hwnd: HWND) {
     unsafe {
@@ -335,15 +365,18 @@ impl Tabs {
         register_class();
         Self {
             tabs: HashMap::new(),
-            ghost: create(0, GHOST_ALPHA, true),
+            ghost: create(0, GHOST_ALPHA, true, true),
         }
     }
 
     /// Bring the target windows in line with `targets` — one per managed
     /// window, in virtual-desktop pixels — creating, moving, reshaping
-    /// and destroying as needed. With `visible` false every target hides
-    /// (laptop mode, or an overlay holding the foreground).
-    pub fn sync(&mut self, targets: &[(WinId, TapTarget)], visible: bool) {
+    /// and destroying as needed, each directly below its own window in
+    /// z-order. With `visible` false every target hides (laptop mode, an
+    /// overlay holding the foreground, a fullscreen foreground); with it
+    /// true a target still hides while its own window is minimized,
+    /// hidden or off `monitor`.
+    pub fn sync(&mut self, targets: &[(WinId, TapTarget)], visible: bool, monitor: Rect) {
         let wanted: HashSet<WinId> = targets.iter().map(|(id, _)| *id).collect();
         let gone: Vec<WinId> = self
             .tabs
@@ -359,7 +392,7 @@ impl Tabs {
         for &(id, target) in targets {
             let hwnd = match self.tabs.get(&id) {
                 Some(&hwnd) => hwnd,
-                None => match create(id, TAB_ALPHA, false) {
+                None => match create(id, TAB_ALPHA, false, false) {
                     Some(hwnd) => {
                         self.tabs.insert(id, hwnd);
                         hwnd
@@ -367,11 +400,9 @@ impl Tabs {
                     None => continue,
                 },
             };
-            if visible {
-                place(hwnd, target);
-            } else {
-                hide(hwnd);
-            }
+            let owner = win::hwnd_of(id);
+            let show = visible && owner_on_screen(owner, monitor);
+            place(hwnd, target, Some(owner), show);
         }
     }
 
@@ -380,10 +411,11 @@ impl Tabs {
         self.tabs.len()
     }
 
-    /// Show the drop highlight over `rect` (virtual-desktop pixels).
+    /// Show the drop highlight over `rect` (virtual-desktop pixels). The
+    /// ghost is topmost so the slot lights up over whatever is there.
     pub fn show_ghost(&self, rect: Rect) {
         if let Some(ghost) = self.ghost {
-            place(ghost, TapTarget::Tab(rect));
+            place(ghost, TapTarget::Tab(rect), None, true);
         }
     }
 

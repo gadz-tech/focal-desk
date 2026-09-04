@@ -75,6 +75,10 @@ pub enum Note {
     /// A dragged tab was released here: move the window to the slot
     /// under the pointer.
     Drop(u64, i32, i32),
+    /// A window was minimized: its frame hides at once (§4).
+    Minimized(u64),
+    /// A minimized window came back: its frame shows again.
+    Restored(u64),
 }
 
 /// Hotkey id: clear the focal stage (Ctrl+Alt+Space).
@@ -199,6 +203,9 @@ struct Service {
     /// Origin of the managed monitor in virtual-desktop coordinates —
     /// the engine works in screen-local pixels, so we add this on.
     origin: (f32, f32),
+    /// The managed monitor's rectangle in virtual-desktop pixels, for
+    /// "is this window off-monitor" and "is the foreground fullscreen".
+    monitor: Rect,
     /// Every window id the engine has been told about and not yet seen
     /// close — *including* ones it declined to manage. The engine keeps
     /// no record of a window it released, so without this the rescan
@@ -250,6 +257,7 @@ impl Service {
         Self {
             engine: Engine::new(cfg),
             origin: (0.0, 0.0),
+            monitor: Rect::new(0.0, 0.0, 1920.0, 1080.0),
             known: HashSet::new(),
             insets: HashMap::new(),
             flights: Vec::new(),
@@ -358,23 +366,32 @@ impl Service {
     }
 
     /// Put a tap target beside every managed window, at the place the
-    /// engine intends for it (its home, or the stage at its fit), and
-    /// hide them all while the layout is frozen or inactive.
+    /// engine intends for it (its home, or the stage at its fit — the
+    /// staged window gets the slim ring), directly below its window in
+    /// z-order. Hide them all while the layout is frozen or inactive, or
+    /// while the foreground window covers the whole monitor (a video, a
+    /// game, a presentation — REQUESTS-2026-09-04 §4); `Tabs::sync`
+    /// hides the frame of a minimized, hidden or off-monitor window on
+    /// its own. Runs when anything changed and on every rescan tick, so
+    /// the z-order and the fullscreen check are re-asserted regularly.
     fn sync_tabs(&mut self) {
         let cfg = self.engine.config();
         let (ox, oy) = self.origin;
+        let staged = self.engine.focused();
         let targets: Vec<(WinId, TapTarget)> = self
             .engine
             .managed()
             .into_iter()
             .filter_map(|id| {
-                self.engine
-                    .placement(id)
-                    .map(|rect| (id, focal_core::tab::tap_target(cfg, rect).offset(ox, oy)))
+                self.engine.placement(id).map(|rect| {
+                    let target = focal_core::tab::tap_target(cfg, rect, staged == Some(id));
+                    (id, target.offset(ox, oy))
+                })
             })
             .collect();
-        let visible = self.engine.is_active() && !self.engine.is_suspended();
-        self.tabs.sync(&targets, visible);
+        let fullscreen = win::covers_monitor(unsafe { GetForegroundWindow() }, self.monitor);
+        let visible = self.engine.is_active() && !self.engine.is_suspended() && !fullscreen;
+        self.tabs.sync(&targets, visible, self.monitor);
         self.tabs_dirty = false;
     }
 
@@ -606,6 +623,7 @@ impl Service {
     fn refresh_displays(&mut self) {
         let (monitor, is_desk) = dock::managed_monitor();
         self.origin = (monitor.x, monitor.y);
+        self.monitor = monitor;
         let screen = Screen::from_px(
             monitor.w as u32,
             monitor.h as u32,
@@ -673,7 +691,7 @@ pub fn run(cfg: Config, config_path: PathBuf) -> windows::core::Result<()> {
     ));
     log::line("running — Ctrl+Alt+Space clears the stage, Ctrl+Alt+D forces desk mode");
     log::line(&format!(
-        "tabs: tap to promote, drag to move ({}); dwell {}",
+        "tabs: tap to promote, drag to move ({}, behind their window; the stage gets a slim ring); dwell {}",
         match service.engine.config().tap_style {
             config::TapStyle::Tab => "one tab per window, facing center",
             config::TapStyle::Border => "a border around every window",
@@ -712,6 +730,8 @@ pub fn run(cfg: Config, config_path: PathBuf) -> windows::core::Result<()> {
                 Note::Tap(id) => service.promote(id, Source::Tab),
                 Note::Drag(id, x, y) => service.on_drag(id, x, y),
                 Note::Drop(id, x, y) => service.on_drop(id, x, y),
+                // The frame follows its window to and from the taskbar.
+                Note::Minimized(_) | Note::Restored(_) => service.tabs_dirty = true,
             }
         }
 
@@ -724,6 +744,11 @@ pub fn run(cfg: Config, config_path: PathBuf) -> windows::core::Result<()> {
                 service.rescan();
             }
             service.update_tray();
+            // Re-assert every frame's z-order and visibility a couple of
+            // times a second: cheap, idempotent, and it catches whatever
+            // the hook did not report (a window hidden or dragged off
+            // the monitor by hand).
+            service.tabs_dirty = true;
         }
 
         service.flights = anim::tick(std::mem::take(&mut service.flights), Instant::now());

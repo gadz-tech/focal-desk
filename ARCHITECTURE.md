@@ -106,8 +106,17 @@ Compiled and smoke-tested on Windows. Its modules are gated on `cfg(windows)`
 (not a Cargo feature), so the crate is an empty shell on Linux CI and the real
 adapter everywhere else. The four things worth knowing:
 
-- **`hook.rs`** — one `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` is the entire
-  input side. Activation is the gesture; there is no other UI.
+- **`hook.rs`** — one `SetWinEventHook` over `EVENT_SYSTEM_FOREGROUND ..=
+  EVENT_SYSTEM_MINIMIZEEND` plus the tabs in `tab.rs` are the entire input
+  side. Since 2026-09-04 a foreground change is informational (it drives the
+  frames' z-order re-assert and, only while `dwell_ms > 0`, the dwell timer);
+  the tab tap, the tab drag and the hotkeys are the gestures.
+- **`tab.rs`** — one layered, non-activating window per managed window, sitting
+  *directly below* it in z-order (never topmost, 2026-09-04 §4): the window
+  covers the inner region, the ring outside is what you tap or drag. Hidden
+  while frozen, under a fullscreen foreground, and when its own window is
+  minimized, hidden or off the managed monitor. The drag is polled from the
+  main loop, not captured.
 - **`frame.rs`** — `GetWindowRect` lies (~7px invisible resize borders, varies
   per app). Measure `DWMWA_EXTENDED_FRAME_BOUNDS` and compensate, or every
   gutter looks ragged.

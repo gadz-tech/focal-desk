@@ -15,6 +15,13 @@
 //! deeper than the margin (`Config::tab_px` clamps it) never touches
 //! another window, another target, or the far side of the channel.
 //! `targets_never_collide` pins it for all thirteen slots.
+//!
+//! 2026-09-04 (REQUESTS §6): **the stage gets a slim ring, no tab.** The
+//! window on the focal stage already has focus; its frame is only a drag
+//! handle and, later, the landing strip for wires, so it is `stage_in`
+//! wide all round and never grows a title tab. The adapter now draws
+//! every target *behind* its window (§4) — geometry here is unchanged by
+//! that; only who is on top is.
 
 use crate::config::{Config, TapStyle};
 use crate::geometry::Rect;
@@ -118,8 +125,19 @@ pub fn border_ring(cfg: &Config, rect: Rect) -> TapTarget {
     }
 }
 
-/// The tap target for a window at `rect` under the configured style.
-pub fn tap_target(cfg: &Config, rect: Rect) -> TapTarget {
+/// The stage's frame: a slim ring all the way around, `stage_px` wide,
+/// with no thick side and no title tab (REQUESTS-2026-09-04 §6). Retires
+/// the 2026-09-03 "the stage gets a title tab on top" rule.
+pub fn stage_frame(cfg: &Config, rect: Rect) -> TapTarget {
+    TapTarget::Border { outer: rect.expand(cfg.stage_px()), inner: rect }
+}
+
+/// The tap target for a window at `rect`: the stage's slim ring while it
+/// is `staged` (on the focal stage), else the configured style.
+pub fn tap_target(cfg: &Config, rect: Rect, staged: bool) -> TapTarget {
+    if staged {
+        return stage_frame(cfg, rect);
+    }
     match cfg.tap_style {
         TapStyle::Tab => TapTarget::Tab(tab_rect(cfg, rect)),
         TapStyle::Border => border_ring(cfg, rect),
@@ -210,7 +228,7 @@ mod tests {
             let mut cfg = Config::default();
             cfg.tap_style = style;
             let bounds: Vec<Rect> = (0..SLOT_COUNT as u8)
-                .map(|i| tap_target(&cfg, layout::window_rect(&cfg, SlotId(i))).bounds())
+                .map(|i| tap_target(&cfg, layout::window_rect(&cfg, SlotId(i)), false).bounds())
                 .collect();
             let wins: Vec<Rect> = (0..SLOT_COUNT as u8)
                 .map(|i| layout::window_rect(&cfg, SlotId(i)))
@@ -261,7 +279,7 @@ mod tests {
         cfg.tap_style = TapStyle::Border;
         let s = slot("right-top");
         let win = layout::window_rect(&cfg, s);
-        match tap_target(&cfg, win) {
+        match tap_target(&cfg, win, false) {
             TapTarget::Border { outer, inner } => {
                 assert_eq!(inner, win);
                 assert!((outer.x - (win.x - cfg.tab_px())).abs() < 0.01);
@@ -288,11 +306,46 @@ mod tests {
     }
 
     #[test]
+    fn the_stage_gets_a_slim_ring_and_no_tab() {
+        for style in [TapStyle::Tab, TapStyle::Border] {
+            let mut cfg = Config::default();
+            cfg.tap_style = style;
+            let stage = layout::window_rect(&cfg, FOCAL);
+            let narrow = layout::focal_rect(&cfg, Some(Fit { w: 0.55, h: 1.0 }));
+            for win in [stage, narrow] {
+                match tap_target(&cfg, win, true) {
+                    TapTarget::Border { outer, inner } => {
+                        assert_eq!(inner, win);
+                        assert!((outer.x - (win.x - cfg.stage_px())).abs() < 0.01);
+                        assert!((outer.y - (win.y - cfg.stage_px())).abs() < 0.01);
+                        assert!((outer.right() - (win.right() + cfg.stage_px())).abs() < 0.01);
+                        assert!(
+                            within(outer, region_px(&cfg, FOCAL)),
+                            "{style:?}: the ring leaves the stage's region"
+                        );
+                    }
+                    other => panic!("{style:?}: the stage got {other:?}, not a slim ring"),
+                }
+            }
+            // Slim means slimmer than a tab, and the ring never meets a
+            // neighbour's target or window.
+            assert!(cfg.stage_px() < cfg.tab_px());
+            let ring = tap_target(&cfg, stage, true).bounds();
+            for i in 1..SLOT_COUNT as u8 {
+                let s = SlotId(i);
+                let other = tap_target(&cfg, layout::window_rect(&cfg, s), false).bounds();
+                assert!(!overlaps(ring, other), "{style:?}: the stage ring meets {}", layout::slot_name(s));
+                assert!(!overlaps(ring, layout::window_rect(&cfg, s)), "{style:?}: ring over {}", layout::slot_name(s));
+            }
+        }
+    }
+
+    #[test]
     fn offset_moves_the_whole_target() {
         let cfg = Config::default();
         let win = layout::window_rect(&cfg, slot("top-1"));
-        let t = tap_target(&cfg, win).offset(100.0, -50.0);
-        let plain = tap_target(&cfg, win).bounds();
+        let t = tap_target(&cfg, win, false).offset(100.0, -50.0);
+        let plain = tap_target(&cfg, win, false).bounds();
         assert_eq!(t.bounds(), Rect::new(plain.x + 100.0, plain.y - 50.0, plain.w, plain.h));
         let ring = border_ring(&cfg, win).offset(10.0, 10.0);
         match ring {

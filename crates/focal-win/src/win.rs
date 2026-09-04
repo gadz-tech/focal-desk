@@ -25,9 +25,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetShellWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, ShowWindow,
-    GWL_EXSTYLE, GWL_STYLE, GW_OWNER, SW_RESTORE, WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_THICKFRAME,
+    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
+    ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_HWNDNEXT, GW_OWNER, SW_SHOWNOACTIVATE, WS_CHILD,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_THICKFRAME,
 };
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -105,14 +105,60 @@ pub fn is_maximized(hwnd: HWND) -> bool {
 
 /// Take a window out of its maximized or snapped state so its geometry
 /// becomes ours to set. Returns true if it actually changed anything.
+/// `SW_SHOWNOACTIVATE` restores like `SW_RESTORE` but without activating
+/// the window: adopting a maximized window must not hand it the focus
+/// (2026-09-04 §1 — focus comes from the tab only).
 pub fn restore_window(hwnd: HWND) -> bool {
     if !is_maximized(hwnd) {
         return false;
     }
     unsafe {
-        let _ = ShowWindow(hwnd, SW_RESTORE);
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     }
     true
+}
+
+/// True when the window is minimized (an icon on the taskbar).
+pub fn is_iconic(hwnd: HWND) -> bool {
+    unsafe { IsIconic(hwnd).as_bool() }
+}
+
+/// True when the window is shown (`WS_VISIBLE`) — which is not the same
+/// as being on screen; see [`covers_monitor`] and [`intersects`].
+pub fn is_visible(hwnd: HWND) -> bool {
+    unsafe { IsWindowVisible(hwnd).as_bool() }
+}
+
+/// True when the handle still names a window.
+pub fn is_window(hwnd: HWND) -> bool {
+    unsafe { IsWindow(Some(hwnd)).as_bool() }
+}
+
+/// The top-level window immediately below `hwnd` in z-order, hidden
+/// ones included. This is how a frame checks it already sits directly
+/// under its window before asking for a z-order change.
+pub fn next_below(hwnd: HWND) -> Option<HWND> {
+    unsafe { GetWindow(hwnd, GW_HWNDNEXT).ok() }
+}
+
+/// True when two rectangles share any area.
+pub fn intersects(a: Rect, b: Rect) -> bool {
+    a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom()
+}
+
+/// True when `hwnd`'s visible frame covers the whole of `monitor` — a
+/// fullscreen video, game or presentation. The shell's own desktop
+/// surfaces cover the monitor too and are excluded, as is anything
+/// hidden or minimized.
+pub fn covers_monitor(hwnd: HWND, monitor: Rect) -> bool {
+    if hwnd.is_invalid() || !is_visible(hwnd) || is_iconic(hwnd) || is_desktop(hwnd) {
+        return false;
+    }
+    let r = visible_rect(hwnd);
+    r.x <= monitor.x + 1.0
+        && r.y <= monitor.y + 1.0
+        && r.right() >= monitor.right() - 1.0
+        && r.bottom() >= monitor.bottom() - 1.0
 }
 
 /// Convert a `HWND` into the engine's opaque window id.
