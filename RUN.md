@@ -9,7 +9,7 @@
 2. **Build and run**
 
    ```
-   cd C:\Dev\focal-desk
+   cd C:\Dev\gadz-tech\focal-desk
    cargo run --release
    ```
 
@@ -22,7 +22,7 @@
    desk mode and the window count) and a log beside the executable:
 
    ```
-   Get-Content C:\Dev\focal-desk\target\release\focal-desk.log -Wait
+   Get-Content C:\Dev\gadz-tech\focal-desk\target\release\focal-desk.log -Wait
    ```
 
    Windows 11 files new tray icons under the taskbar's `^` overflow. Drag it
@@ -31,7 +31,7 @@
 ## Start it at logon
 
 ```
-powershell -ExecutionPolicy Bypass -File C:\Dev\focal-desk\install-task.ps1
+powershell -ExecutionPolicy Bypass -File C:\Dev\gadz-tech\focal-desk\install-task.ps1
 ```
 
 Registers a scheduled task that starts focal-desk 15 seconds after you log in,
@@ -138,7 +138,9 @@ process = *obs64*
   logon task above already does; a manual launch does not.
 - **`focal-desk.conf`, the log and the executable all live in `target\release\`,
   so `cargo clean` deletes your tuning** and breaks the scheduled task's path.
-  Keep a copy of the conf once you've dialled it in.
+  Keep a copy of the conf once you've dialled it in. Moving the repo breaks the
+  task the same way — it fails silently at logon (`0x80070002`, file not
+  found) — so re-run `install-task.ps1` from the new location afterwards.
 - **Maximized windows are restored before being placed.** A maximized window
   keeps drawing its frame for the screen edge it thinks it is against, so
   focal-desk restores it first. You may see a window un-maximize as it is
